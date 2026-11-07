@@ -292,6 +292,10 @@ export default function App() {
   const myTextRef = useRef('');
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 현재 진행 중인 발신 연결 (타임아웃/로딩 상태는 이 연결에만 적용)
+  const pendingConnRef = useRef<DataConnection | null>(null);
+  // 내가 발신한 연결 목록 (중복 연결 시 양측이 동일한 연결을 남기기 위한 판정용)
+  const outgoingConnsRef = useRef(new WeakSet<DataConnection>());
   const autoConnectAttempted = useRef(false);
 
   // 실시간 디버그 로그 기록 헬퍼
@@ -311,48 +315,61 @@ export default function App() {
     }, duration);
   }, []);
 
-  // 최신 ref 동기화
-  useEffect(() => {
-    connectionsRef.current = connections;
-  }, [connections]);
-
   useEffect(() => {
     myTextRef.current = myText;
   }, [myText]);
 
-  // 특정 peer 연결 제거 헬퍼
-  const removeConnection = useCallback((peerId: string, conn: DataConnection) => {
-    setConnections((prev) => {
-      const next = prev.filter((c) => c !== conn && c.peer !== peerId);
-      if (next.length !== prev.length) {
-        showToast(`[${peerId.toUpperCase()}] 기기와의 연결이 종료되었습니다.`, 3000);
-        addLog(`연결 종료됨: ${peerId}`);
-      }
-      return next;
-    });
-  }, [showToast, addLog]);
+  // 연결 목록 갱신 (ref를 즉시 갱신하여 이벤트 핸들러 간 경쟁 상태 방지)
+  const commitConnections = useCallback((next: DataConnection[]) => {
+    connectionsRef.current = next;
+    setConnections(next);
+  }, []);
+
+  // 진행 중인 발신 연결 상태 해제 (conn 지정 시 해당 연결이 진행 중일 때만 해제)
+  const clearPending = useCallback((conn?: DataConnection) => {
+    if (conn && pendingConnRef.current !== conn) return;
+    if (connectTimeoutTimer.current) {
+      clearTimeout(connectTimeoutTimer.current);
+      connectTimeoutTimer.current = null;
+    }
+    pendingConnRef.current = null;
+    setIsConnecting(false);
+  }, []);
+
+  // 특정 연결 제거 헬퍼 (같은 피어의 다른 연결은 건드리지 않도록 객체 단위로 비교)
+  const removeConnection = useCallback((conn: DataConnection) => {
+    if (!connectionsRef.current.includes(conn)) return;
+    commitConnections(connectionsRef.current.filter((c) => c !== conn));
+    showToast(`[${conn.peer.toUpperCase()}] 기기와의 연결이 종료되었습니다.`, 3000);
+    addLog(`연결 종료됨: ${conn.peer}`);
+  }, [commitConnections, showToast, addLog]);
+
+  // 같은 피어와 연결이 2개 생겼을 때 양측이 동일하게 남길 연결 판정 키
+  // (발신자 ID가 작은 쪽 → connectionId가 작은 쪽 우선, connectionId는 양측이 공유)
+  const connectionRank = useCallback((conn: DataConnection) => {
+    const initiatorId = outgoingConnsRef.current.has(conn) ? peerRef.current?.id ?? '' : conn.peer;
+    return `${initiatorId}|${conn.connectionId}`;
+  }, []);
 
   // 열려 있는 모든 피어에게 브로드캐스트
   const broadcastText = useCallback((textToSend: string) => {
-    const deadPeers: string[] = [];
+    const deadConns: DataConnection[] = [];
 
     connectionsRef.current.forEach((conn) => {
-      if (conn && conn.open) {
+      if (conn.open) {
         try {
           conn.send(textToSend);
         } catch (err) {
           console.error(`피어(${conn.peer}) 데이터 전송 실패:`, err);
-          deadPeers.push(conn.peer);
+          deadConns.push(conn);
         }
       } else {
-        deadPeers.push(conn.peer);
+        deadConns.push(conn);
       }
     });
 
-    if (deadPeers.length > 0) {
-      setConnections((prev) => prev.filter((c) => !deadPeers.includes(c.peer)));
-    }
-  }, []);
+    deadConns.forEach((conn) => removeConnection(conn));
+  }, [removeConnection]);
 
   // 텍스트 입력 변경 핸들러
   const handleTextChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
@@ -367,20 +384,25 @@ export default function App() {
     addLog(`상대방(${targetDisplay})과 WebRTC 연결 설정 시작...`);
 
     const handleOpen = () => {
-      if (connectTimeoutTimer.current) {
-        clearTimeout(connectTimeoutTimer.current);
-        connectTimeoutTimer.current = null;
-      }
-      setIsConnecting(false);
+      clearPending(conn);
 
-      setConnections((prev) => {
-        if (prev.some((c) => c.peer === conn.peer)) {
-          return prev;
+      const existing = connectionsRef.current.find((c) => c.peer === conn.peer && c !== conn);
+      if (existing) {
+        // 중복 연결: 양측이 같은 규칙으로 하나만 남기고 나머지는 닫음
+        if (connectionRank(conn) < connectionRank(existing)) {
+          commitConnections(connectionsRef.current.map((c) => (c === existing ? conn : c)));
+          existing.close();
+          addLog(`[${targetDisplay}] 중복 연결 감지: 새 연결로 교체`);
+        } else {
+          addLog(`[${targetDisplay}] 중복 연결 감지: 기존 연결 유지`);
+          conn.close();
+          return;
         }
-        return [...prev, conn];
-      });
-      addLog(`🎉 [${targetDisplay}] 데이터 채널 OPEN 성공!`);
-      showToast(`🎉 [${targetDisplay}] 기기와 성공적으로 연결되었습니다!`, 3500);
+      } else {
+        commitConnections([...connectionsRef.current, conn]);
+        addLog(`🎉 [${targetDisplay}] 데이터 채널 OPEN 성공!`);
+        showToast(`🎉 [${targetDisplay}] 기기와 성공적으로 연결되었습니다!`, 3500);
+      }
 
       // 연결 직후 기존 작성된 텍스트 동기화
       if (myTextRef.current && conn.open) {
@@ -409,14 +431,14 @@ export default function App() {
 
     // 연결 종료 및 에러 처리
     conn.on('close', () => {
-      setIsConnecting(false);
-      removeConnection(conn.peer, conn);
+      clearPending(conn);
+      removeConnection(conn);
     });
 
     conn.on('error', (err) => {
       addLog(`[${targetDisplay}] Connection error: ${err.message || String(err)}`);
-      setIsConnecting(false);
-      removeConnection(conn.peer, conn);
+      clearPending(conn);
+      removeConnection(conn);
       showToast(`[${targetDisplay}] P2P 오류 (${err.message || '네트워크'})`, 4000);
     });
 
@@ -426,13 +448,13 @@ export default function App() {
         const iceState = conn.peerConnection?.iceConnectionState;
         addLog(`[${targetDisplay}] ICE State: ${iceState}`);
         if (iceState === 'failed') {
-          setIsConnecting(false);
-          removeConnection(conn.peer, conn);
+          clearPending(conn);
+          removeConnection(conn);
           showToast(`[${targetDisplay}] 네트워크 방화벽으로 P2P 연결 실패`, 4000);
         }
       });
     }
-  }, [removeConnection, showToast, addLog]);
+  }, [clearPending, commitConnections, connectionRank, removeConnection, showToast, addLog]);
 
   // 내부 연결 시도 공통 함수
   const initiateConnect = useCallback((targetId: string) => {
@@ -455,41 +477,48 @@ export default function App() {
       return;
     }
 
-    setIsConnecting(true);
     const targetDisplay = targetId.toUpperCase();
     addLog(`발신 연결 요청: ${targetDisplay}`);
-    showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 15000);
 
-    // 타임아웃 감지 (15초)
-    if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
-    connectTimeoutTimer.current = setTimeout(() => {
-      setIsConnecting(false);
-      addLog(`[${targetDisplay}] 15초 타임아웃 발생.`);
-      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 브라우저 화면이 켜져 있는지 확인해 주세요.`, 5000);
-    }, 15000);
+    // 이전 발신 시도가 남아 있으면 정리 (늦게 열려 중복 연결이 되는 것 방지)
+    const previousPending = pendingConnRef.current;
+    clearPending();
+    previousPending?.close();
 
-    // 표준 WebRTC DataConnection 수립 (serialization: 'raw'로 가볍고 빠른 순수 텍스트 전송)
+    // 표준 WebRTC DataConnection 수립
+    // serialization: 'binary'는 16KB 초과 메시지를 자동 청크 분할하므로 긴 텍스트도 연결이 끊기지 않음
     // 주의: PeerJS 1.5의 유효 값은 'raw' | 'json' | 'binary' | 'binary-utf8' 뿐이며, 그 외 값은 connect()에서 예외 발생
     let conn: DataConnection | undefined;
     try {
       conn = peerRef.current.connect(targetId, {
         reliable: true,
-        serialization: 'raw',
+        serialization: 'binary',
       });
     } catch (err) {
       addLog(`connect() 호출 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!conn) {
-      if (connectTimeoutTimer.current) {
-        clearTimeout(connectTimeoutTimer.current);
-        connectTimeoutTimer.current = null;
-      }
-      setIsConnecting(false);
       showToast(`[${targetDisplay}] 연결을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.`, 4000);
       return;
     }
+
+    outgoingConnsRef.current.add(conn);
+    pendingConnRef.current = conn;
+    setIsConnecting(true);
+    showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 15000);
+
+    // 타임아웃 감지 (15초): 응답 없는 연결은 닫아서 뒤늦게 열리지 않도록 함
+    const pendingConn = conn;
+    connectTimeoutTimer.current = setTimeout(() => {
+      if (pendingConnRef.current !== pendingConn) return;
+      clearPending();
+      pendingConn.close();
+      addLog(`[${targetDisplay}] 15초 타임아웃 발생.`);
+      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 브라우저 화면이 켜져 있는지 확인해 주세요.`, 5000);
+    }, 15000);
+
     setupConnection(conn);
-  }, [setupConnection, showToast, addLog]);
+  }, [clearPending, setupConnection, showToast, addLog]);
 
   // Peer 인스턴스 초기화 (앱 마운트 시 단 1회 실행)
   useEffect(() => {
@@ -533,7 +562,6 @@ export default function App() {
       peer.on('error', (err) => {
         addLog(`Peer error: ${err.type} - ${err.message}`);
         console.error('PeerJS error:', err);
-        setIsConnecting(false);
 
         if (err.type === 'unavailable-id') {
           addLog('ID 충돌 발생, 새 ID로 재생성...');
@@ -541,6 +569,11 @@ export default function App() {
           initPeer();
           return;
         }
+
+        // 진행 중인 발신 연결은 실패 처리 (타임아웃 메시지가 뒤늦게 중복 노출되지 않도록 타이머도 해제)
+        const failedPending = pendingConnRef.current;
+        clearPending();
+        failedPending?.close();
 
         if (err.type === 'peer-unavailable') {
           showToast('해당 ID의 기기를 찾을 수 없습니다. (상대방이 새로고침했거나 화면이 꺼져 있을 수 있습니다)', 5000);

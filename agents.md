@@ -87,6 +87,11 @@
   - `src/*.jsx` → `.tsx`, `vite.config.js` → `.ts` 전환 및 strict 타입 적용
   - `tsconfig.json`(references) / `tsconfig.app.json` / `tsconfig.node.json` 구성, `npm run build` 시 `tsc -b` 타입 체크 선행
   - PeerJS `serialization`은 `'raw' | 'json' | 'binary' | 'binary-utf8'`만 유효 (`'none'` 사용 시 `connect()` 예외)
+- [x] 프롬프트 10: 연결 안정성 버그 수정
+  - 연결 제거를 객체 단위로 비교하여 중복 연결 정리 시 정상 연결까지 삭제되던 문제 수정
+  - 동시 연결로 생긴 중복 연결은 (발신자 ID, connectionId) 기준으로 양측이 동일한 1개만 유지
+  - `serialization: 'binary'`로 16KB 초과 텍스트 자동 청크 분할 전송 (긴 텍스트 전송 시 연결 끊김 방지)
+  - 진행 중인 발신 연결(`pendingConnRef`)에만 타임아웃/로딩 상태 적용, `peer-unavailable` 시 타이머 해제
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

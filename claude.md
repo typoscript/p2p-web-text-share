@@ -31,6 +31,10 @@
    - WebRTC DataChannel 및 PeerConnection 다중 계층 닫힘 감지로 연결 종료 시 기기 수 즉시 동기화.
    - 브로드캐스트 실패 시 끊긴 피어 자동 감지 및 목록 정리.
    - Tailwind 기반 부드러운 전환 효과(transition, active scale, pulse/ping 애니메이션) 적용.
+6. **가독성 높은 6자리 단축 ID & 초대 링크**:
+   - 헷갈리는 문자(0/O, 1/I/L)를 제외한 Base32 기반 6자리 단축 ID 체계 적용 (약 10억 7천만 가지 조합).
+   - 전역 충돌 방지를 위한 내부 네임스페이스(`p2ptxt-`) 분리 및 `unavailable-id` 자동 자가치유(Self-healing).
+   - URL 쿼리 파라미터(`?join=XXXXXX`) 기반 원클릭 초대 링크 복사 및 자동 접속 지원.
 
 ## 3. 에이전트 공통 규칙
 - **문서 동기화 절대 원칙**:
@@ -66,6 +70,9 @@
 - [x] 프롬프트 6: 상세 기술 명세서(README.md) 작성 완료
   - 시스템 아키텍처 및 시그널링 흐름 Mermaid 다이어그램 포함
   - 1:N 메시 브로드캐스팅, 렌더링 최적화, 4중 계층 단절 방어 메커니즘 등 엔지니어링 고려 사항 기술
+- [x] 프롬프트 7: 사용자 경험 개선 - 가독성 높은 6자리 단축 ID & 원클릭 초대 링크 구현
+  - 혼동 문자(0/O, 1/I/L) 배제된 Base32 6자리 식별자 발급
+  - 내부 네임스페이스(`p2ptxt-`) 충돌 방어 및 `?join=XXXXXX` URL 파라미터 자동 연결
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

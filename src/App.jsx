@@ -1,6 +1,39 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import Peer from 'peerjs';
-import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles } from 'lucide-react';
+import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2 } from 'lucide-react';
+
+// 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
+const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const CODE_PREFIX = 'p2ptxt-';
+
+// 6자리 고유 랜덤 코드 생성기 (32^6 = 약 10억 7천만 개 조합)
+function generateShortCode(length = 6) {
+  let result = '';
+  const bytes = new Uint8Array(length);
+  window.crypto.getRandomValues(bytes);
+  for (let i = 0; i < length; i++) {
+    result += CODE_CHARS[bytes[i] % CODE_CHARS.length];
+  }
+  return result;
+}
+
+// 사용자 입력값을 실제 내부 PeerJS ID로 변환
+function toFullPeerId(input) {
+  const clean = input.trim();
+  if (clean.toLowerCase().startsWith(CODE_PREFIX)) {
+    return clean.toLowerCase();
+  }
+  return `${CODE_PREFIX}${clean.toUpperCase()}`;
+}
+
+// 내부 PeerJS ID를 사용자가 보기 편한 6자리 대문자 코드로 변환
+function toDisplayId(peerId) {
+  if (!peerId) return '';
+  if (peerId.toLowerCase().startsWith(CODE_PREFIX)) {
+    return peerId.slice(CODE_PREFIX.length).toUpperCase();
+  }
+  return peerId;
+}
 
 // 상단 헤더 컴포넌트
 const Header = memo(function Header({
@@ -8,37 +41,59 @@ const Header = memo(function Header({
   peerInputId,
   setPeerInputId,
   connectedCount,
-  copied,
+  copiedId,
+  copiedLink,
   statusMessage,
   onCopyId,
+  onCopyInviteLink,
   onConnect,
 }) {
+  const displayId = toDisplayId(myPeerId);
+
   return (
     <header className="flex-none bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6 transition-colors duration-200">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between max-w-7xl mx-auto">
         {/* 좌측: 내 기기 ID & 연결된 기기 수 */}
         <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
           <div className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs sm:text-sm transition-all duration-200">
-            <span className="text-slate-400 font-medium">내 기기 ID:</span>
-            <code className="font-mono font-semibold text-indigo-400 bg-slate-950/70 px-2 py-0.5 rounded border border-slate-800 select-all tracking-wide">
-              {myPeerId || 'ID 발급 중...'}
+            <span className="text-slate-400 font-medium">내 ID:</span>
+            <code className="font-mono text-base font-bold text-indigo-400 bg-slate-950/80 px-2.5 py-0.5 rounded border border-slate-800 tracking-wider select-all">
+              {displayId || '생성 중...'}
             </code>
+
+            {/* ID 복사 버튼 */}
             <button
               type="button"
               onClick={onCopyId}
-              disabled={!myPeerId}
-              title="ID 클립보드 복사"
-              className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90 ml-0.5"
+              disabled={!displayId}
+              title="6자리 ID 복사"
+              className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
             >
-              {copied ? (
-                <Check className="w-4 h-4 text-emerald-400 transition-transform duration-200 scale-110" />
+              {copiedId ? (
+                <Check className="w-4 h-4 text-emerald-400 transition-transform scale-110" />
               ) : (
-                <Copy className="w-4 h-4 transition-transform duration-150" />
+                <Copy className="w-4 h-4" />
               )}
             </button>
-            {copied && (
+
+            {/* 초대 링크 복사 버튼 */}
+            <button
+              type="button"
+              onClick={onCopyInviteLink}
+              disabled={!displayId}
+              title="원클릭 접속 초대 링크 복사"
+              className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
+            >
+              {copiedLink ? (
+                <Check className="w-4 h-4 text-emerald-400 transition-transform scale-110" />
+              ) : (
+                <Share2 className="w-4 h-4" />
+              )}
+            </button>
+
+            {(copiedId || copiedLink) && (
               <span className="text-[11px] sm:text-xs text-emerald-400 font-semibold animate-pulse">
-                복사됨!
+                {copiedLink ? '초대링크 복사됨!' : 'ID 복사됨!'}
               </span>
             )}
           </div>
@@ -53,7 +108,7 @@ const Header = memo(function Header({
                 </span>
               )}
             </div>
-            <span>연결된 기기 수:</span>
+            <span>연결된 기기:</span>
             <span
               className={`font-bold transition-all duration-300 ${
                 connectedCount > 0 ? 'text-emerald-400 scale-105' : 'text-indigo-400'
@@ -70,9 +125,9 @@ const Header = memo(function Header({
           <input
             type="text"
             value={peerInputId}
-            onChange={(e) => setPeerInputId(e.target.value)}
-            placeholder="상대방 ID 입력"
-            className="flex-1 sm:w-64 bg-slate-800/70 hover:bg-slate-800 focus:bg-slate-800/90 border border-slate-700/80 text-slate-100 text-xs sm:text-sm rounded-lg px-3 py-1.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder-slate-500 font-mono shadow-inner"
+            onChange={(e) => setPeerInputId(e.target.value.toUpperCase())}
+            placeholder="상대방 6자리 ID (예: 7K9P2X)"
+            className="flex-1 sm:w-64 bg-slate-800/70 hover:bg-slate-800 focus:bg-slate-800/90 border border-slate-700/80 text-slate-100 text-xs sm:text-sm rounded-lg px-3 py-1.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder-slate-500 font-mono tracking-wider shadow-inner"
           />
           <button
             type="submit"
@@ -84,7 +139,7 @@ const Header = memo(function Header({
         </form>
       </div>
 
-      {/* 상태/알림 메시지 토스트 (부드러운 전환 효과) */}
+      {/* 상태/알림 메시지 토스트 */}
       <div
         className={`max-w-7xl mx-auto transition-all duration-300 ease-in-out overflow-hidden ${
           statusMessage ? 'max-h-16 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
@@ -160,7 +215,8 @@ export default function App() {
   const [myPeerId, setMyPeerId] = useState('');
   const [peerInputId, setPeerInputId] = useState('');
   const [connections, setConnections] = useState([]);
-  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
   const [myText, setMyText] = useState('');
@@ -170,6 +226,7 @@ export default function App() {
   const connectionsRef = useRef([]);
   const myTextRef = useRef('');
   const toastTimerRef = useRef(null);
+  const autoConnectAttempted = useRef(false);
 
   // 안내 토스트 노출 헬퍼 함수
   const showToast = useCallback((msg, duration = 3000) => {
@@ -195,13 +252,13 @@ export default function App() {
     setConnections((prev) => {
       const next = prev.filter((c) => c !== conn && c.peer !== peerId);
       if (next.length !== prev.length) {
-        showToast(`${peerId} 기기와의 연결이 종료되었습니다.`, 3000);
+        showToast(`[${toDisplayId(peerId)}] 기기와의 연결이 종료되었습니다.`, 3000);
       }
       return next;
     });
   }, [showToast]);
 
-  // 열려 있는 모든 피어에게 브로드캐스트 (실패하거나 끊긴 연결 자동 감지 및 제거)
+  // 열려 있는 모든 피어에게 브로드캐스트
   const broadcastText = useCallback((textToSend) => {
     const deadPeers = [];
 
@@ -214,7 +271,6 @@ export default function App() {
           deadPeers.push(conn.peer);
         }
       } else {
-        // 이미 닫힌 상태인 connection 감지
         deadPeers.push(conn.peer);
       }
     });
@@ -231,7 +287,7 @@ export default function App() {
     broadcastText(newText);
   }, [broadcastText]);
 
-  // Connection 이벤트 리스너 등록 및 다중 계층 연결 끊김 방어 로직
+  // Connection 이벤트 리스너 등록
   const setupConnection = useCallback((conn) => {
     const handleOpen = () => {
       setConnections((prev) => {
@@ -240,7 +296,7 @@ export default function App() {
         }
         return [...prev, conn];
       });
-      showToast(`${conn.peer} 기기와 연결되었습니다!`, 3000);
+      showToast(`[${toDisplayId(conn.peer)}] 기기와 연결되었습니다!`, 3000);
 
       // 연결 직후 기존 작성된 텍스트가 있다면 즉시 초기 동기화
       if (myTextRef.current && conn.open) {
@@ -284,7 +340,7 @@ export default function App() {
       });
     }
 
-    // 3) WebRTC PeerConnection 상태 변경 감지 (상대방 탭 종료, 네트워크 단절 즉시 감지)
+    // 3) WebRTC PeerConnection 상태 변경 감지
     if (conn.peerConnection) {
       conn.peerConnection.addEventListener('connectionstatechange', () => {
         const state = conn.peerConnection?.connectionState;
@@ -295,92 +351,143 @@ export default function App() {
     }
   }, [removeConnection, showToast]);
 
-  // Peer 인스턴스 초기화
-  useEffect(() => {
-    const peer = new Peer();
-    peerRef.current = peer;
+  // 내부 연결 시도 공통 함수
+  const initiateConnect = useCallback((targetFullId) => {
+    if (!targetFullId) return;
 
-    peer.on('open', (id) => {
-      setMyPeerId(id);
-    });
-
-    // 상대방 연결 요청 수락
-    peer.on('connection', (conn) => {
-      setupConnection(conn);
-    });
-
-    peer.on('error', (err) => {
-      console.error('PeerJS error:', err);
-      if (err.type === 'peer-unavailable') {
-        showToast('입력하신 ID의 상대를 찾을 수 없습니다.', 4000);
-      } else {
-        showToast(`P2P 오류: ${err.message || err.type}`, 4000);
-      }
-    });
-
-    // 페이지 언로드 시 연결 정리
-    const handleBeforeUnload = () => {
-      peer.destroy();
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      peer.destroy();
-      peerRef.current = null;
-    };
-  }, [setupConnection, showToast]);
-
-  // ID 복사
-  const handleCopyId = useCallback(async () => {
-    if (!myPeerId) return;
-    try {
-      await navigator.clipboard.writeText(myPeerId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy ID:', err);
-    }
-  }, [myPeerId]);
-
-  // 상대방 ID로 연결 요청 및 예외 처리
-  const handleConnect = useCallback((e) => {
-    e.preventDefault();
-    const targetId = peerInputId.trim();
-
-    // 1) 입력값이 비어있을 때
-    if (!targetId) {
-      showToast('연결할 상대방의 ID를 입력해 주세요.', 3000);
-      return;
-    }
-
-    // 2) 내 본인의 ID를 입력했을 때 ("자기 자신과는 연결할 수 없습니다" 경고)
-    if (targetId === myPeerId) {
+    if (targetFullId === peerRef.current?.id) {
       showToast('자기 자신과는 연결할 수 없습니다.', 3500);
       return;
     }
 
-    // 3) 이미 연결된 ID를 중복으로 연결하려고 할 때
-    if (connectionsRef.current.some((c) => c.peer === targetId)) {
+    if (connectionsRef.current.some((c) => c.peer === targetFullId)) {
       showToast('이미 연결되어 있는 기기입니다.', 3500);
       return;
     }
 
-    // PeerJS 미준비 상태 점검
     if (!peerRef.current || peerRef.current.destroyed) {
       showToast('P2P 서비스가 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.', 3000);
       return;
     }
 
-    // 연결 시도
-    const conn = peerRef.current.connect(targetId, {
+    const conn = peerRef.current.connect(targetFullId, {
       reliable: true,
     });
 
     setupConnection(conn);
+    showToast(`[${toDisplayId(targetFullId)}] 기기에 연결 요청 중...`, 3000);
+  }, [setupConnection, showToast]);
+
+  // Peer 인스턴스 초기화 (짧은 ID 생성 및 충돌 복구 지원)
+  useEffect(() => {
+    let currentPeer = null;
+
+    const initPeer = () => {
+      const shortCode = generateShortCode(6);
+      const fullId = `${CODE_PREFIX}${shortCode}`;
+
+      const peer = new Peer(fullId);
+      currentPeer = peer;
+      peerRef.current = peer;
+
+      peer.on('open', (id) => {
+        setMyPeerId(id);
+
+        // URL에 ?join= 또는 ?connect= 가 있는 경우 자동 연결 처리
+        if (!autoConnectAttempted.current) {
+          const params = new URLSearchParams(window.location.search);
+          const joinParam = params.get('join') || params.get('connect');
+          if (joinParam && joinParam.trim()) {
+            autoConnectAttempted.current = true;
+            const targetFullId = toFullPeerId(joinParam);
+            setTimeout(() => {
+              initiateConnect(targetFullId);
+            }, 500);
+            // URL 파라미터 정리
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        }
+      });
+
+      // 상대방 연결 요청 수락
+      peer.on('connection', (conn) => {
+        setupConnection(conn);
+      });
+
+      peer.on('error', (err) => {
+        console.error('PeerJS error:', err);
+        // 만약 10억 분의 1 확률로 ID 충돌 발생 시 새 ID로 재초기화
+        if (err.type === 'unavailable-id') {
+          console.warn('ID 충돌 감지, 새로운 고유 ID로 재생성합니다.');
+          peer.destroy();
+          initPeer();
+          return;
+        }
+
+        if (err.type === 'peer-unavailable') {
+          showToast('해당 ID의 기기를 찾을 수 없습니다. 상대방 ID를 확인해 주세요.', 4000);
+        } else {
+          showToast(`P2P 오류: ${err.message || err.type}`, 4000);
+        }
+      });
+    };
+
+    initPeer();
+
+    // 페이지 언로드 시 연결 정리
+    const handleBeforeUnload = () => {
+      currentPeer?.destroy();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      currentPeer?.destroy();
+      peerRef.current = null;
+    };
+  }, [setupConnection, initiateConnect, showToast]);
+
+  // ID 클립보드 복사
+  const handleCopyId = useCallback(async () => {
+    const displayId = toDisplayId(myPeerId);
+    if (!displayId) return;
+    try {
+      await navigator.clipboard.writeText(displayId);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy ID:', err);
+    }
+  }, [myPeerId]);
+
+  // 원클릭 초대 링크 클립보드 복사
+  const handleCopyInviteLink = useCallback(async () => {
+    const displayId = toDisplayId(myPeerId);
+    if (!displayId) return;
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?join=${displayId}`;
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy invite link:', err);
+    }
+  }, [myPeerId]);
+
+  // 폼 제출을 통한 상대방 연결
+  const handleConnect = useCallback((e) => {
+    e.preventDefault();
+    const rawInput = peerInputId.trim();
+
+    if (!rawInput) {
+      showToast('연결할 상대방의 6자리 ID를 입력해 주세요.', 3000);
+      return;
+    }
+
+    const targetFullId = toFullPeerId(rawInput);
+    initiateConnect(targetFullId);
     setPeerInputId('');
-    showToast(`${targetId} 기기에 연결 요청 중...`, 3000);
-  }, [peerInputId, myPeerId, setupConnection, showToast]);
+  }, [peerInputId, initiateConnect, showToast]);
 
   return (
     <div className="flex flex-col h-[100dvh] w-screen bg-slate-950 text-slate-100 overflow-hidden select-none transition-colors duration-200">
@@ -390,9 +497,11 @@ export default function App() {
         peerInputId={peerInputId}
         setPeerInputId={setPeerInputId}
         connectedCount={connections.length}
-        copied={copied}
+        copiedId={copiedId}
+        copiedLink={copiedLink}
         statusMessage={statusMessage}
         onCopyId={handleCopyId}
+        onCopyInviteLink={handleCopyInviteLink}
         onConnect={handleConnect}
       />
 

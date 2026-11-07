@@ -246,6 +246,34 @@ const SenderPanel = memo(function SenderPanel({ text, onChange }: SenderPanelPro
 
 // 하단 패널: 상대방이 보낸 텍스트 수신창
 const ReceiverPanel = memo(function ReceiverPanel({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  // 수신 텍스트 전체 복사 (Clipboard API 미지원/거부 시 execCommand 폴백)
+  const handleCopy = useCallback(async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const temp = document.createElement('textarea');
+      temp.value = text;
+      temp.setAttribute('readonly', '');
+      temp.style.position = 'fixed';
+      temp.style.opacity = '0';
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+    }
+    setCopied(true);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  }, [text]);
+
   return (
     <section className="flex-1 flex flex-col min-h-0 bg-slate-900 border border-slate-800/90 hover:border-slate-700/80 rounded-xl overflow-hidden shadow-lg shadow-black/20 transition-all duration-200">
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/50 border-b border-slate-800/80 transition-colors">
@@ -255,9 +283,31 @@ const ReceiverPanel = memo(function ReceiverPanel({ text }: { text: string }) {
             상대방이 보낸 텍스트
           </h2>
         </div>
-        <span className="text-[11px] text-slate-400 font-medium bg-slate-800/70 px-2 py-0.5 rounded border border-slate-700/40">
-          읽기 전용 (Read-only)
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="hidden sm:inline text-[11px] text-slate-400 font-medium bg-slate-800/70 px-2 py-0.5 rounded border border-slate-700/40">
+            읽기 전용 (Read-only)
+          </span>
+          {/* 수신 텍스트 복사 버튼 */}
+          <button
+            type="button"
+            onClick={handleCopy}
+            disabled={!text}
+            title="받은 텍스트 전체 복사"
+            className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-medium text-slate-300 hover:text-white bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/60 px-2.5 py-1 rounded-md transition-all duration-150 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-emerald-400">복사됨!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                <span>복사</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <div className="flex-1 min-h-0 p-2.5 bg-slate-950/40">
         <textarea

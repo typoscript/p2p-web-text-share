@@ -1,18 +1,34 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import Peer from 'peerjs';
-import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2, RefreshCw } from 'lucide-react';
+import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2 } from 'lucide-react';
 
 // 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-// 글로벌 STUN 서버 풀
+// 글로벌 STUN + 무료 공용 TURN 릴레이 서버 풀 (사파리 시크릿모드, LTE/5G 대칭형 NAT, 방화벽 돌파)
 const ICE_SERVERS_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
+    // Open Relay Project (TURN 릴레이: P2P 직접 홀펀칭 실패 시 서버 릴레이로 100% 통과)
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
   ],
+  iceCandidatePoolSize: 10,
   sdpSemantics: 'unified-plan',
 };
 
@@ -27,7 +43,7 @@ function generateShortCode(length = 6) {
   return result;
 }
 
-// 사용자 입력값 정규화 (소문자로 정규화하여 대소문자 불일치 차단)
+// 사용자 입력값 정규화 (소문자 변환 및 URL 파라미터 추출)
 function normalizePeerId(input) {
   let clean = input.trim().toLowerCase();
   if (clean.includes('join=')) {
@@ -168,7 +184,7 @@ const Header = memo(function Header({
       {/* 상태/알림 메시지 토스트 */}
       <div
         className={`max-w-7xl mx-auto transition-all duration-300 ease-in-out overflow-hidden ${
-          statusMessage ? 'max-h-20 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
+          statusMessage ? 'max-h-24 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
         }`}
       >
         <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-200 bg-indigo-950/70 border border-indigo-700/50 px-3.5 py-2 rounded-lg shadow-sm">
@@ -367,24 +383,24 @@ export default function App() {
       console.error(`Connection error with ${conn.peer}:`, err);
       setIsConnecting(false);
       removeConnection(conn.peer, conn);
-      showToast(`[${targetDisplay}] 연결 오류가 발생했습니다.`, 3500);
+      showToast(`[${targetDisplay}] P2P 연결 실패 (${err.message || '네트워크 제한'})`, 4000);
     });
 
-    // 브라우저 WebRTC DataChannel 이벤트
-    if (conn.dataChannel) {
-      conn.dataChannel.addEventListener('close', () => {
-        removeConnection(conn.peer, conn);
-      });
-      conn.dataChannel.addEventListener('error', () => {
-        removeConnection(conn.peer, conn);
-      });
-    }
-
-    // WebRTC PeerConnection 상태 변경 감지
+    // WebRTC PeerConnection ICE 상태 감지
     if (conn.peerConnection) {
+      conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
+        const iceState = conn.peerConnection?.iceConnectionState;
+        if (iceState === 'failed') {
+          console.error('ICE Connection failed with', conn.peer);
+          setIsConnecting(false);
+          removeConnection(conn.peer, conn);
+          showToast(`[${targetDisplay}] NAT/방화벽 통과 실패 (TURN 릴레이 재시도 권장)`, 4000);
+        }
+      });
+
       conn.peerConnection.addEventListener('connectionstatechange', () => {
         const state = conn.peerConnection?.connectionState;
-        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+        if (state === 'failed' || state === 'closed') {
           setIsConnecting(false);
           removeConnection(conn.peer, conn);
         }
@@ -421,7 +437,7 @@ export default function App() {
     if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
     connectTimeoutTimer.current = setTimeout(() => {
       setIsConnecting(false);
-      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 기기의 화면이 켜져 있는지 확인해 주세요.`, 5000);
+      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 화면이 켜져 있는지 확인해 주세요.`, 5000);
     }, 12000);
 
     // 표준 WebRTC DataConnection 수립
@@ -434,7 +450,6 @@ export default function App() {
     let currentPeer = null;
 
     const initPeer = () => {
-      // 6자리 고유 ID 자체를 Peer ID로 사용 (소문자 저장)
       const shortId = generateShortCode(6).toLowerCase();
 
       const peer = new Peer(shortId, {
@@ -471,7 +486,6 @@ export default function App() {
         console.error('PeerJS error:', err);
         setIsConnecting(false);
 
-        // 10억분의 1 확률로 ID 충돌 시 재시도
         if (err.type === 'unavailable-id') {
           console.warn('ID 충돌 발생, 새 ID로 재초기화합니다.');
           peer.destroy();
@@ -480,7 +494,7 @@ export default function App() {
         }
 
         if (err.type === 'peer-unavailable') {
-          showToast('해당 ID의 기기를 찾을 수 없습니다. (원인: 상대방이 새로고침하여 ID가 바뀌었거나, 상대방 화면이 꺼져 있을 수 있습니다)', 5000);
+          showToast('해당 ID의 기기를 찾을 수 없습니다. (상대방이 새로고침했거나 화면이 꺼져 있을 수 있습니다)', 5000);
         } else {
           showToast(`P2P 오류: ${err.message || err.type}`, 4000);
         }
@@ -506,7 +520,6 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // 언로드 시 정리
     const handleBeforeUnload = () => {
       currentPeer?.destroy();
     };
@@ -519,7 +532,7 @@ export default function App() {
       currentPeer?.destroy();
       peerRef.current = null;
     };
-  }, []); // 의존성 배열을 빈 배열로 하여 단 1회만 초기화 보장!
+  }, []);
 
   // ID 클립보드 복사
   const handleCopyId = useCallback(async () => {

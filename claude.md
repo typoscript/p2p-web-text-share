@@ -35,10 +35,11 @@
    - 헷갈리는 문자(0/O, 1/I/L)를 제외한 Base32 기반 6자리 단축 ID 체계 적용 (약 10억 7천만 가지 조합).
    - 전역 충돌 방지를 위한 내부 네임스페이스(`p2ptxt-`) 분리 및 `unavailable-id` 자동 자가치유(Self-healing).
    - URL 쿼리 파라미터(`?join=XXXXXX`) 기반 원클릭 초대 링크 복사 및 자동 접속 지원.
-7. **크로스 디바이스(iOS/Mac) P2P 연결 최적화**:
+7. **크로스 디바이스(iOS/Mac) P2P 연결 최적화 및 TURN 릴레이 지원**:
    - ID 대소문자 소문자 통일 정규화로 PeerJS 시그널링 불일치 원천 차단.
-   - Google & Cloudflare 다중 STUN 서버 풀 구성으로 모바일 LTE/5G NAT 홀펀칭 강화.
+   - Google & Cloudflare 다중 STUN 서버 + Open Relay TURN(포트 80/443 TCP/UDP) 풀 구성으로 사파리 시크릿 모드, LTE/5G 대칭형 NAT, 방화벽 환경 홀펀칭 보장.
    - iOS Safari 비표준 옵션 충돌 방지 및 모바일 백그라운드 복귀 시 자동 재연결(`visibilitychange`).
+   - 실시간 P2P 서버 등록 상태 인디케이터(초록불 `●`) 탑재.
 
 ## 3. 에이전트 공통 규칙
 - **문서 동기화 절대 원칙**:
@@ -77,9 +78,9 @@
 - [x] 프롬프트 7: 사용자 경험 개선 - 가독성 높은 6자리 단축 ID & 원클릭 초대 링크 구현
   - 혼동 문자(0/O, 1/I/L) 배제된 Base32 6자리 식별자 발급
   - 내부 네임스페이스(`p2ptxt-`) 충돌 방어 및 `?join=XXXXXX` URL 파라미터 자동 연결
-- [x] 프롬프트 8: 크로스 디바이스(iOS/Mac) P2P 연결 최적화 및 STUN 풀 구성
+- [x] 프롬프트 8: 크로스 디바이스(iOS/Mac) P2P 연결 최적화 및 STUN/TURN 풀 구성
   - ID 대소문자 소문자 통일 정규화로 PeerJS 시그널링 불일치 원천 차단
-  - Google & Cloudflare 다중 STUN 서버 풀 구성으로 모바일 LTE/5G NAT 홀펀칭 강화
+  - Google & Cloudflare 다중 STUN + Open Relay TURN(TCP 443) 서버 풀 구성으로 사파리 시크릿 모드/LTE NAT 홀펀칭 강화
   - iOS Safari 비표준 옵션 충돌 방지 및 모바일 백그라운드 복귀 시 자동 재연결(`visibilitychange`)
 
 ## 5. 배포 및 CI/CD

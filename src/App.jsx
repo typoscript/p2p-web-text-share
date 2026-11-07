@@ -1,19 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import Peer from 'peerjs';
-import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2 } from 'lucide-react';
+import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2, RefreshCw } from 'lucide-react';
 
 // 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-const CODE_PREFIX = 'p2ptxt-';
 
-// 글로벌 STUN 서버 풀 (모바일 LTE/5G 및 공유기 NAT 홀펀칭 강화)
+// 글로벌 STUN 서버 풀
 const ICE_SERVERS_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
   sdpSemantics: 'unified-plan',
@@ -30,32 +27,19 @@ function generateShortCode(length = 6) {
   return result;
 }
 
-// 사용자 입력값을 내부 PeerJS 고유 ID로 정규화 (항상 소문자로 통일하여 대소문자 불일치 원천 차단)
-function toFullPeerId(input) {
+// 사용자 입력값 정규화 (소문자로 정규화하여 대소문자 불일치 차단)
+function normalizePeerId(input) {
   let clean = input.trim().toLowerCase();
-  // 사용자가 URL 전체나 접두사를 붙여넣은 경우 처리
   if (clean.includes('join=')) {
     clean = clean.split('join=')[1].split('&')[0];
   }
-  if (clean.startsWith(CODE_PREFIX)) {
-    return clean;
-  }
-  return `${CODE_PREFIX}${clean}`;
-}
-
-// 내부 PeerJS ID를 사용자가 보기 편한 6자리 대문자 코드로 변환
-function toDisplayId(peerId) {
-  if (!peerId) return '';
-  const lower = peerId.toLowerCase();
-  if (lower.startsWith(CODE_PREFIX)) {
-    return lower.slice(CODE_PREFIX.length).toUpperCase();
-  }
-  return peerId.toUpperCase();
+  return clean;
 }
 
 // 상단 헤더 컴포넌트
 const Header = memo(function Header({
   myPeerId,
+  isPeerReady,
   peerInputId,
   setPeerInputId,
   connectedCount,
@@ -67,7 +51,7 @@ const Header = memo(function Header({
   onCopyInviteLink,
   onConnect,
 }) {
-  const displayId = toDisplayId(myPeerId);
+  const displayId = myPeerId ? myPeerId.toUpperCase() : '';
 
   return (
     <header className="flex-none bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6 transition-colors duration-200">
@@ -75,6 +59,18 @@ const Header = memo(function Header({
         {/* 좌측: 내 기기 ID & 연결된 기기 수 */}
         <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
           <div className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs sm:text-sm transition-all duration-200">
+            {/* 온라인 상태 인디케이터 */}
+            <span className="relative flex h-2.5 w-2.5" title={isPeerReady ? 'P2P 준비 완료 (온라인)' : 'P2P 서버 연결 중...'}>
+              {isPeerReady ? (
+                <>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </>
+              ) : (
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500 animate-pulse"></span>
+              )}
+            </span>
+
             <span className="text-slate-400 font-medium">내 ID:</span>
             <code className="font-mono text-base font-bold text-indigo-400 bg-slate-950/80 px-2.5 py-0.5 rounded border border-slate-800 tracking-wider select-all">
               {displayId || '생성 중...'}
@@ -100,7 +96,7 @@ const Header = memo(function Header({
               type="button"
               onClick={onCopyInviteLink}
               disabled={!displayId}
-              title="원클릭 초대 링크 복사 (상대방 자동 연결)"
+              title="원클릭 초대 링크 복사"
               className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
             >
               {copiedLink ? (
@@ -172,11 +168,11 @@ const Header = memo(function Header({
       {/* 상태/알림 메시지 토스트 */}
       <div
         className={`max-w-7xl mx-auto transition-all duration-300 ease-in-out overflow-hidden ${
-          statusMessage ? 'max-h-16 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
+          statusMessage ? 'max-h-20 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
         }`}
       >
-        <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-200 bg-indigo-950/70 border border-indigo-700/50 px-3.5 py-1.5 rounded-lg shadow-sm">
-          <AlertCircle className="w-4 h-4 text-indigo-400 flex-none animate-bounce" />
+        <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-200 bg-indigo-950/70 border border-indigo-700/50 px-3.5 py-2 rounded-lg shadow-sm">
+          <AlertCircle className="w-4 h-4 text-indigo-400 flex-none" />
           <span className="font-medium">{statusMessage}</span>
         </div>
       </div>
@@ -243,6 +239,7 @@ const ReceiverPanel = memo(function ReceiverPanel({ text }) {
 
 export default function App() {
   const [myPeerId, setMyPeerId] = useState('');
+  const [isPeerReady, setIsPeerReady] = useState(false);
   const [peerInputId, setPeerInputId] = useState('');
   const [connections, setConnections] = useState([]);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -284,7 +281,7 @@ export default function App() {
     setConnections((prev) => {
       const next = prev.filter((c) => c !== conn && c.peer !== peerId);
       if (next.length !== prev.length) {
-        showToast(`[${toDisplayId(peerId)}] 기기와의 연결이 종료되었습니다.`, 3000);
+        showToast(`[${peerId.toUpperCase()}] 기기와의 연결이 종료되었습니다.`, 3000);
       }
       return next;
     });
@@ -321,7 +318,7 @@ export default function App() {
 
   // Connection 이벤트 리스너 등록
   const setupConnection = useCallback((conn) => {
-    const targetDisplay = toDisplayId(conn.peer);
+    const targetDisplay = conn.peer.toUpperCase();
 
     const handleOpen = () => {
       if (connectTimeoutTimer.current) {
@@ -396,52 +393,51 @@ export default function App() {
   }, [removeConnection, showToast]);
 
   // 내부 연결 시도 공통 함수
-  const initiateConnect = useCallback((targetFullId) => {
-    if (!targetFullId) return;
+  const initiateConnect = useCallback((targetId) => {
+    if (!targetId) return;
 
     const myCurrentId = peerRef.current?.id;
-    if (targetFullId === myCurrentId) {
+    if (targetId === myCurrentId) {
       showToast('자기 자신과는 연결할 수 없습니다.', 3500);
       return;
     }
 
-    if (connectionsRef.current.some((c) => c.peer === targetFullId)) {
+    if (connectionsRef.current.some((c) => c.peer === targetId)) {
       showToast('이미 연결되어 있는 기기입니다.', 3500);
       return;
     }
 
     if (!peerRef.current || peerRef.current.destroyed || peerRef.current.disconnected) {
-      showToast('P2P 시그널링 서버와 다시 연결 중입니다. 잠시 후 시도해 주세요.', 3500);
+      showToast('P2P 서버와 재연결 중입니다. 잠시 후 다시 시도해 주세요.', 3500);
       peerRef.current?.reconnect();
       return;
     }
 
     setIsConnecting(true);
-    const targetDisplay = toDisplayId(targetFullId);
+    const targetDisplay = targetId.toUpperCase();
     showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 12000);
 
-    // 타임아웃 감지 (12초 내 연결 미수립 시 사용자에게 명확한 피드백 제공)
+    // 타임아웃 감지 (12초)
     if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
     connectTimeoutTimer.current = setTimeout(() => {
       setIsConnecting(false);
-      showToast(`[${targetDisplay}] 기기 응답 없음. 상대방 화면이 켜져 있는지 확인해 주세요.`, 5000);
+      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 기기의 화면이 켜져 있는지 확인해 주세요.`, 5000);
     }, 12000);
 
     // 표준 WebRTC DataConnection 수립
-    const conn = peerRef.current.connect(targetFullId);
+    const conn = peerRef.current.connect(targetId);
     setupConnection(conn);
   }, [setupConnection, showToast]);
 
-  // Peer 인스턴스 초기화 (소문자 정규화 ID 및 STUN 풀 구성)
+  // Peer 인스턴스 초기화 (앱 마운트 시 단 1회 실행)
   useEffect(() => {
     let currentPeer = null;
 
     const initPeer = () => {
-      // 6자리 단축 코드 생성 후 소문자로 내부 ID 생성
-      const shortCode = generateShortCode(6).toLowerCase();
-      const fullId = `${CODE_PREFIX}${shortCode}`;
+      // 6자리 고유 ID 자체를 Peer ID로 사용 (소문자 저장)
+      const shortId = generateShortCode(6).toLowerCase();
 
-      const peer = new Peer(fullId, {
+      const peer = new Peer(shortId, {
         config: ICE_SERVERS_CONFIG,
       });
       currentPeer = peer;
@@ -449,6 +445,7 @@ export default function App() {
 
       peer.on('open', (id) => {
         setMyPeerId(id);
+        setIsPeerReady(true);
 
         // URL에 ?join= 파라미터가 있을 시 자동 연결 시도
         if (!autoConnectAttempted.current) {
@@ -456,16 +453,16 @@ export default function App() {
           const joinParam = params.get('join') || params.get('connect');
           if (joinParam && joinParam.trim()) {
             autoConnectAttempted.current = true;
-            const targetFullId = toFullPeerId(joinParam);
+            const targetId = normalizePeerId(joinParam);
             setTimeout(() => {
-              initiateConnect(targetFullId);
-            }, 800);
+              initiateConnect(targetId);
+            }, 600);
             window.history.replaceState({}, '', window.location.pathname);
           }
         }
       });
 
-      // 상대방 연결 요청 자동 수락
+      // 상대방 연결 요청 수락
       peer.on('connection', (conn) => {
         setupConnection(conn);
       });
@@ -474,24 +471,23 @@ export default function App() {
         console.error('PeerJS error:', err);
         setIsConnecting(false);
 
-        // ID 충돌 시 자동 재시도
+        // 10억분의 1 확률로 ID 충돌 시 재시도
         if (err.type === 'unavailable-id') {
-          console.warn('ID 충돌 감지, 새 ID로 재초기화합니다.');
+          console.warn('ID 충돌 발생, 새 ID로 재초기화합니다.');
           peer.destroy();
           initPeer();
           return;
         }
 
         if (err.type === 'peer-unavailable') {
-          showToast('해당 ID의 기기를 찾을 수 없습니다. 상대방 ID를 다시 확인해 주세요.', 4500);
+          showToast('해당 ID의 기기를 찾을 수 없습니다. (원인: 상대방이 새로고침하여 ID가 바뀌었거나, 상대방 화면이 꺼져 있을 수 있습니다)', 5000);
         } else {
-          showToast(`P2P 연결 오류: ${err.message || err.type}`, 4000);
+          showToast(`P2P 오류: ${err.message || err.type}`, 4000);
         }
       });
 
-      // 연결이 끊어졌을 때 자동 재연결
       peer.on('disconnected', () => {
-        console.warn('PeerJS 시그널링 서버 연결 끊김. 재연결 시도...');
+        setIsPeerReady(false);
         if (!peer.destroyed) {
           peer.reconnect();
         }
@@ -500,7 +496,7 @@ export default function App() {
 
     initPeer();
 
-    // 모바일 브라우저 백그라운드 전환 복귀 시 시그널링 재연결
+    // 모바일 브라우저 백그라운드 복귀 시 자동 재연결
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         if (currentPeer && currentPeer.disconnected && !currentPeer.destroyed) {
@@ -510,7 +506,7 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // 언로드 시 연결 정리
+    // 언로드 시 정리
     const handleBeforeUnload = () => {
       currentPeer?.destroy();
     };
@@ -523,14 +519,13 @@ export default function App() {
       currentPeer?.destroy();
       peerRef.current = null;
     };
-  }, [setupConnection, initiateConnect, showToast]);
+  }, []); // 의존성 배열을 빈 배열로 하여 단 1회만 초기화 보장!
 
   // ID 클립보드 복사
   const handleCopyId = useCallback(async () => {
-    const displayId = toDisplayId(myPeerId);
-    if (!displayId) return;
+    if (!myPeerId) return;
     try {
-      await navigator.clipboard.writeText(displayId);
+      await navigator.clipboard.writeText(myPeerId.toUpperCase());
       setCopiedId(true);
       setTimeout(() => setCopiedId(false), 2000);
     } catch (err) {
@@ -540,9 +535,8 @@ export default function App() {
 
   // 원클릭 초대 링크 클립보드 복사
   const handleCopyInviteLink = useCallback(async () => {
-    const displayId = toDisplayId(myPeerId);
-    if (!displayId) return;
-    const inviteUrl = `${window.location.origin}${window.location.pathname}?join=${displayId}`;
+    if (!myPeerId) return;
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?join=${myPeerId.toUpperCase()}`;
     try {
       await navigator.clipboard.writeText(inviteUrl);
       setCopiedLink(true);
@@ -562,8 +556,8 @@ export default function App() {
       return;
     }
 
-    const targetFullId = toFullPeerId(rawInput);
-    initiateConnect(targetFullId);
+    const targetId = normalizePeerId(rawInput);
+    initiateConnect(targetId);
     setPeerInputId('');
   }, [peerInputId, initiateConnect, showToast]);
 
@@ -572,6 +566,7 @@ export default function App() {
       {/* 상단 헤더 */}
       <Header
         myPeerId={myPeerId}
+        isPeerReady={isPeerReady}
         peerInputId={peerInputId}
         setPeerInputId={setPeerInputId}
         connectedCount={connections.length}

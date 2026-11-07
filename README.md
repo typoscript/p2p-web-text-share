@@ -30,7 +30,11 @@ PeerJS 클라우드 시그널링 서버를 통해 브라우저 간 SDP 교환 �
   - 1:1 통신에 국한되지 않고, 여러 피어와 동시에 연결하여 텍스트를 실시간 멀티캐스트 전송.
 - **상하 2분할 듀얼 패널 인터페이스 (Split-View UX)**:
   - **상단 패널 (송신부)**: 로컬에서 자유롭게 작성 및 편집하는 실시간 입력 공간.
-  - **하단 패널 (수신부)**: 연결된 원격 피어들로부터 수신된 최신 텍스트를 렌더링하는 읽기 전용 공간.
+  - **하단 패널 (수신부)**: 연결된 원격 피어들로부터 수신된 최신 텍스트를 **기기별 탭**으로 구분해 렌더링하는 읽기 전용 공간 (전체 복사, 온라인 표시, 새 텍스트 알림).
+- **QR 코드 초대**:
+  - 초대 링크를 QR 코드로 표시하여 다른 기기의 카메라로 스캔만 하면 즉시 연결.
+- **새로고침에도 텍스트 유지**:
+  - 입력 중인 텍스트와 수신 텍스트를 브라우저 저장소에 보관하여, 새로고침이나 iOS 탭 복원 후에도 그대로 복원.
 - **신규 피어 접속 시 최신 상태 즉시 동기화 (Initial State Sync)**:
   - 새로운 피어가 연결되면 현재 작성된 텍스트 스냅샷을 즉시 자동 전송하여 데이터 연속성 보장.
 - **4중 계층 연결 단절 방어 메커니즘 (Fault-Tolerant Connection Tracking)**:
@@ -124,9 +128,15 @@ p2p-web-text-share/
 ├── src/
 │   ├── App.tsx               # 메인 P2P 로직, 상태 관리, 2분할 UI 컴포넌트
 │   ├── main.tsx              # React DOM 렌더 진입점
+│   ├── iceConfig.ts          # STUN/TURN ICE 서버 구성 로더 및 연결 경로 진단
+│   ├── storage.ts            # 입력/수신 텍스트 저장·복원 (sessionStorage 탭별 + localStorage)
+│   ├── components/
+│   │   ├── ReceiverPanel.tsx # 기기별 탭 수신 패널 (복사, 온라인 표시, 새 텍스트 알림)
+│   │   └── QrInviteModal.tsx # 초대 링크 QR 코드 모달
 │   ├── vite-env.d.ts         # Vite 클라이언트 타입 선언
 │   └── index.css             # Tailwind 디렉티브 및 100dvh 레이아웃/스크롤바 스타일
 ├── index.html                # 루트 HTML 템플릿
+├── .env.example              # TURN 릴레이 환경 변수 예시
 ├── vite.config.ts            # Vite 빌드 및 GitHub Pages base 경로('/p2p-web-text-share/') 설정
 ├── tsconfig.json             # TypeScript 프로젝트 references (app / node)
 ├── tsconfig.app.json         # src 대상 strict TS 설정
@@ -168,6 +178,19 @@ npm run dev
 ```bash
 npm run build
 ```
+
+### 5. TURN 릴레이 설정 (선택)
+LTE/5G 등 대칭형 NAT 환경에서는 STUN만으로 연결이 실패할 수 있어 TURN 릴레이가 필요합니다.
+
+- **로컬**: `.env.example`을 `.env.local`로 복사한 뒤 값을 입력합니다.
+- **배포**: GitHub 저장소 `Settings → Secrets and variables → Actions`에 같은 이름의 Secret을 등록하면 빌드 시 주입됩니다.
+
+| 변수 | 설명 |
+|---|---|
+| `VITE_TURN_CREDENTIALS_URL` | `RTCIceServer[]` JSON을 반환하는 자격 증명 API (예: Metered `https://<앱>.metered.live/api/v1/turn/credentials?apiKey=<KEY>`) |
+| `VITE_TURN_URLS` / `VITE_TURN_USERNAME` / `VITE_TURN_CREDENTIAL` | 고정 TURN 서버 정보 (URL은 쉼표 구분). API가 없거나 실패 시 사용 |
+
+> `VITE_` 값은 빌드된 JS에 포함되어 공개되므로, 사용량 제한이 있는 무료/전용 키만 사용하세요. 설정이 없으면 STUN만으로 동작하며, 실제 연결 경로(직접/STUN/TURN 릴레이)는 앱의 **로그** 패널에서 확인할 수 있습니다.
 
 ---
 

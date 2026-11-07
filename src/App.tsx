@@ -1,21 +1,21 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import Peer from 'peerjs';
 import type { DataConnection, PeerOptions } from 'peerjs';
-import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2, Terminal, ChevronDown, ChevronUp } from 'lucide-react';
+import { loadIceConfig, getSelectedCandidateType, summarizeCandidates, formatCandidateCounts, diagnoseFailure } from './iceConfig';
+import { Copy, Check, Link2, Users, Send, Sparkles, Share2, Loader2, Terminal, ChevronDown, ChevronUp, QrCode } from 'lucide-react';
+import { QrInviteModal } from './components/QrInviteModal';
+import { Toast } from './components/Toast';
+import type { ToastState, ToastVariant } from './components/Toast';
+import { ReceiverPanel } from './components/ReceiverPanel';
+import { loadMyText, saveMyText, loadReceived, saveReceived } from './storage';
+import type { ReceivedEntry } from './storage';
+
+// 알림 토스트 기본 표시 시간
+const TOAST_DURATION_MS = 2000;
 
 // 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-
-// 가장 빠르고 신뢰성 높은 글로벌 STUN 서버 (불안정한 서드파티 TURN 제거하여 타임아웃 지연 원천 차단)
-const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-  ],
-};
 
 function generateShortCode(length = 6): string {
   let result = '';
@@ -44,11 +44,11 @@ interface HeaderProps {
   isConnecting: boolean;
   copiedId: boolean;
   copiedLink: boolean;
-  statusMessage: string;
   showDebug: boolean;
   onToggleDebug: () => void;
   onCopyId: () => void;
   onCopyInviteLink: () => void;
+  onShowQr: () => void;
   onConnect: (e: FormEvent<HTMLFormElement>) => void;
 }
 
@@ -62,11 +62,11 @@ const Header = memo(function Header({
   isConnecting,
   copiedId,
   copiedLink,
-  statusMessage,
   showDebug,
   onToggleDebug,
   onCopyId,
   onCopyInviteLink,
+  onShowQr,
   onConnect,
 }: HeaderProps) {
   const displayId = myPeerId ? myPeerId.toUpperCase() : '';
@@ -122,6 +122,17 @@ const Header = memo(function Header({
               ) : (
                 <Share2 className="w-4 h-4" />
               )}
+            </button>
+
+            {/* QR 코드 초대 버튼 */}
+            <button
+              type="button"
+              onClick={onShowQr}
+              disabled={!displayId}
+              title="QR 코드로 초대"
+              className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
+            >
+              <QrCode className="w-4 h-4" />
             </button>
 
             {(copiedId || copiedLink) && (
@@ -194,18 +205,6 @@ const Header = memo(function Header({
           </button>
         </form>
       </div>
-
-      {/* 상태/알림 메시지 토스트 */}
-      <div
-        className={`max-w-7xl mx-auto transition-all duration-300 ease-in-out overflow-hidden ${
-          statusMessage ? 'max-h-24 opacity-100 mt-2.5' : 'max-h-0 opacity-0 mt-0 pointer-events-none'
-        }`}
-      >
-        <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-200 bg-indigo-950/70 border border-indigo-700/50 px-3.5 py-2 rounded-lg shadow-sm">
-          <AlertCircle className="w-4 h-4 text-indigo-400 flex-none" />
-          <span className="font-medium">{statusMessage}</span>
-        </div>
-      </div>
     </header>
   );
 });
@@ -244,84 +243,6 @@ const SenderPanel = memo(function SenderPanel({ text, onChange }: SenderPanelPro
   );
 });
 
-// 하단 패널: 상대방이 보낸 텍스트 수신창
-const ReceiverPanel = memo(function ReceiverPanel({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-  }, []);
-
-  // 수신 텍스트 전체 복사 (Clipboard API 미지원/거부 시 execCommand 폴백)
-  const handleCopy = useCallback(async () => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const temp = document.createElement('textarea');
-      temp.value = text;
-      temp.setAttribute('readonly', '');
-      temp.style.position = 'fixed';
-      temp.style.opacity = '0';
-      document.body.appendChild(temp);
-      temp.select();
-      document.execCommand('copy');
-      document.body.removeChild(temp);
-    }
-    setCopied(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
-  }, [text]);
-
-  return (
-    <section className="flex-1 flex flex-col min-h-0 bg-slate-900 border border-slate-800/90 hover:border-slate-700/80 rounded-xl overflow-hidden shadow-lg shadow-black/20 transition-all duration-200">
-      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/50 border-b border-slate-800/80 transition-colors">
-        <div className="flex items-center gap-2">
-          <Download className="w-4 h-4 text-emerald-400" />
-          <h2 className="text-xs sm:text-sm font-semibold tracking-wide text-slate-200">
-            상대방이 보낸 텍스트
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden sm:inline text-[11px] text-slate-400 font-medium bg-slate-800/70 px-2 py-0.5 rounded border border-slate-700/40">
-            읽기 전용 (Read-only)
-          </span>
-          {/* 수신 텍스트 복사 버튼 */}
-          <button
-            type="button"
-            onClick={handleCopy}
-            disabled={!text}
-            title="받은 텍스트 전체 복사"
-            className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-medium text-slate-300 hover:text-white bg-slate-800/70 hover:bg-slate-700/80 border border-slate-700/60 px-2.5 py-1 rounded-md transition-all duration-150 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-emerald-400">복사됨!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                <span>복사</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-      <div className="flex-1 min-h-0 p-2.5 bg-slate-950/40">
-        <textarea
-          readOnly
-          value={text}
-          placeholder="연결된 상대방이 입력한 텍스트가 실시간으로 여기에 표시됩니다."
-          className="w-full h-full resize-none bg-transparent text-slate-300 text-sm font-mono p-2 focus:outline-none placeholder-slate-600 leading-relaxed cursor-default custom-scrollbar transition-opacity duration-150"
-          spellCheck={false}
-        />
-      </div>
-    </section>
-  );
-});
-
 export default function App() {
   const [myPeerId, setMyPeerId] = useState('');
   const [isPeerReady, setIsPeerReady] = useState(false);
@@ -330,17 +251,27 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('');
+  const [toast, setToast] = useState<ToastState | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
 
-  const [myText, setMyText] = useState('');
-  const [receivedText, setReceivedText] = useState('');
+  const [showQr, setShowQr] = useState(false);
+
+  // 새로고침/iOS 탭 복원 시에도 이전 텍스트 유지
+  const [myText, setMyText] = useState(loadMyText);
+  const [received, setReceived] = useState<ReceivedEntry[]>(loadReceived);
+  const [activePeerId, setActivePeerId] = useState<string | null>(() => {
+    const restored = loadReceived();
+    if (restored.length === 0) return null;
+    return restored.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a)).peerId;
+  });
+  const [unreadPeerIds, setUnreadPeerIds] = useState<Set<string>>(() => new Set());
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<DataConnection[]>([]);
-  const myTextRef = useRef('');
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const myTextRef = useRef(myText);
+  const activePeerIdRef = useRef(activePeerId);
+  const toastTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const connectTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 현재 진행 중인 발신 연결 (타임아웃/로딩 상태는 이 연결에만 적용)
   const pendingConnRef = useRef<DataConnection | null>(null);
@@ -355,19 +286,82 @@ export default function App() {
     setLogs((prev) => [...prev.slice(-30), `[${time}] ${msg}`]);
   }, []);
 
-  // 안내 토스트 노출 헬퍼 함수
-  const showToast = useCallback((msg: string, duration = 3000) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setStatusMessage(msg);
-    toastTimerRef.current = setTimeout(() => {
-      setStatusMessage('');
-      toastTimerRef.current = null;
-    }, duration);
+  // 상단 플로팅 토스트 노출 헬퍼 (기본 2초 표시 후 페이드아웃)
+  const showToast = useCallback((message: string, variant: ToastVariant = 'info', duration = TOAST_DURATION_MS) => {
+    toastTimersRef.current.forEach(clearTimeout);
+    const id = Date.now();
+    // 처음엔 숨긴 상태로 렌더링한 뒤 다음 틱에 표시하여 슬라이드인 전환 적용
+    setToast({ id, message, variant, visible: false });
+    toastTimersRef.current = [
+      setTimeout(() => setToast((t) => (t && t.id === id ? { ...t, visible: true } : t)), 20),
+      setTimeout(() => setToast((t) => (t && t.id === id ? { ...t, visible: false } : t)), duration),
+      setTimeout(() => setToast((t) => (t && t.id === id ? null : t)), duration + 300),
+    ];
   }, []);
+
+  useEffect(() => () => toastTimersRef.current.forEach(clearTimeout), []);
 
   useEffect(() => {
     myTextRef.current = myText;
   }, [myText]);
+
+  useEffect(() => {
+    activePeerIdRef.current = activePeerId;
+  }, [activePeerId]);
+
+  // localStorage 저장 (타이핑 중 과도한 쓰기를 막기 위해 300ms 디바운스)
+  useEffect(() => {
+    const timer = setTimeout(() => saveMyText(myText), 300);
+    return () => clearTimeout(timer);
+  }, [myText]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => saveReceived(received), 300);
+    return () => clearTimeout(timer);
+  }, [received]);
+
+  // 기기별 수신 텍스트 갱신 (처음 받은 기기는 자동 선택, 보고 있지 않은 탭은 새 텍스트 표시)
+  const handleReceivedText = useCallback((peerId: string, text: string) => {
+    setReceived((prev) => {
+      const entry: ReceivedEntry = { peerId, text, updatedAt: Date.now() };
+      return prev.some((e) => e.peerId === peerId)
+        ? prev.map((e) => (e.peerId === peerId ? entry : e))
+        : [...prev, entry];
+    });
+    if (!activePeerIdRef.current) {
+      activePeerIdRef.current = peerId;
+      setActivePeerId(peerId);
+    } else if (activePeerIdRef.current !== peerId) {
+      setUnreadPeerIds((prev) => (prev.has(peerId) ? prev : new Set(prev).add(peerId)));
+    }
+  }, []);
+
+  const handleSelectPeer = useCallback((peerId: string) => {
+    activePeerIdRef.current = peerId;
+    setActivePeerId(peerId);
+    setUnreadPeerIds((prev) => {
+      if (!prev.has(peerId)) return prev;
+      const next = new Set(prev);
+      next.delete(peerId);
+      return next;
+    });
+  }, []);
+
+  const handleRemovePeerText = useCallback((peerId: string) => {
+    const next = received.filter((e) => e.peerId !== peerId);
+    setReceived(next);
+    if (activePeerIdRef.current === peerId) {
+      const fallback = next.length > 0 ? next[next.length - 1].peerId : null;
+      activePeerIdRef.current = fallback;
+      setActivePeerId(fallback);
+    }
+    setUnreadPeerIds((prev) => {
+      if (!prev.has(peerId)) return prev;
+      const next = new Set(prev);
+      next.delete(peerId);
+      return next;
+    });
+  }, [received]);
 
   // 연결 목록 갱신 (ref를 즉시 갱신하여 이벤트 핸들러 간 경쟁 상태 방지)
   const commitConnections = useCallback((next: DataConnection[]) => {
@@ -390,7 +384,7 @@ export default function App() {
   const removeConnection = useCallback((conn: DataConnection) => {
     if (!connectionsRef.current.includes(conn)) return;
     commitConnections(connectionsRef.current.filter((c) => c !== conn));
-    showToast(`[${conn.peer.toUpperCase()}] 기기와의 연결이 종료되었습니다.`, 3000);
+    showToast(`[${conn.peer.toUpperCase()}] 기기와의 연결이 끊어졌습니다.`, 'warning');
     addLog(`연결 종료됨: ${conn.peer}`);
   }, [commitConnections, showToast, addLog]);
 
@@ -451,7 +445,7 @@ export default function App() {
       } else {
         commitConnections([...connectionsRef.current, conn]);
         addLog(`🎉 [${targetDisplay}] 데이터 채널 OPEN 성공!`);
-        showToast(`🎉 [${targetDisplay}] 기기와 성공적으로 연결되었습니다!`, 3500);
+        showToast(`[${targetDisplay}] 기기와 연결되었습니다.`, 'success');
       }
 
       // 연결 직후 기존 작성된 텍스트 동기화
@@ -476,7 +470,7 @@ export default function App() {
         typeof data === 'string'
           ? data
           : ((data as { text?: string } | null)?.text ?? String(data));
-      setReceivedText(text);
+      handleReceivedText(conn.peer, text);
     });
 
     // 연결 종료 및 에러 처리
@@ -489,22 +483,50 @@ export default function App() {
       addLog(`[${targetDisplay}] Connection error: ${err.message || String(err)}`);
       clearPending(conn);
       removeConnection(conn);
-      showToast(`[${targetDisplay}] P2P 오류 (${err.message || '네트워크'})`, 4000);
+      showToast(`[${targetDisplay}] P2P 오류 (${err.message || '네트워크'})`, 'error');
     });
 
     // WebRTC PeerConnection ICE 상태 감지
     if (conn.peerConnection) {
+      // 내 쪽에서 수집된 후보 종류 기록 (host가 .local이면 mDNS로 내부 IP가 가려진 상태)
+      const gathered: Record<string, number> = {};
+      conn.peerConnection.addEventListener('icecandidate', (e) => {
+        if (e.candidate) {
+          const type = e.candidate.type ?? 'unknown';
+          const key = type === 'host' && e.candidate.address?.endsWith('.local') ? 'host(mDNS)' : type;
+          gathered[key] = (gathered[key] ?? 0) + 1;
+        } else {
+          addLog(`[${targetDisplay}] 내 ICE 후보 수집 완료: ${formatCandidateCounts(gathered)}`);
+        }
+      });
+
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
         const iceState = conn.peerConnection?.iceConnectionState;
         addLog(`[${targetDisplay}] ICE State: ${iceState}`);
+        if (iceState === 'connected' || iceState === 'completed') {
+          const pc = conn.peerConnection;
+          getSelectedCandidateType(pc)
+            .then((type) => {
+              const label = type === 'relay' ? 'TURN 릴레이' : type === 'srflx' || type === 'prflx' ? 'STUN 홀펀칭' : type === 'host' ? '같은 네트워크 직접' : '알 수 없음';
+              addLog(`[${targetDisplay}] 연결 경로: ${label}${type ? ` (${type})` : ''}`);
+            })
+            .catch(() => {});
+        }
         if (iceState === 'failed') {
+          const pc = conn.peerConnection;
+          summarizeCandidates(pc)
+            .then((summary) => {
+              addLog(`[${targetDisplay}] 후보 요약 - 내: ${formatCandidateCounts(summary.local)} / 상대: ${formatCandidateCounts(summary.remote)}`);
+              addLog(`[${targetDisplay}] 추정 원인: ${diagnoseFailure(summary)}`);
+            })
+            .catch(() => {});
           clearPending(conn);
           removeConnection(conn);
-          showToast(`[${targetDisplay}] 네트워크 방화벽으로 P2P 연결 실패`, 4000);
+          showToast(`[${targetDisplay}] 연결 실패 (로그에서 원인 확인)`, 'error');
         }
       });
     }
-  }, [clearPending, commitConnections, connectionRank, removeConnection, showToast, addLog]);
+  }, [clearPending, commitConnections, connectionRank, removeConnection, handleReceivedText, showToast, addLog]);
 
   // 내부 연결 시도 공통 함수
   const initiateConnect = useCallback((targetId: string) => {
@@ -512,17 +534,17 @@ export default function App() {
 
     const myCurrentId = peerRef.current?.id;
     if (targetId === myCurrentId) {
-      showToast('자기 자신과는 연결할 수 없습니다.', 3500);
+      showToast('자기 자신과는 연결할 수 없습니다.', 'warning');
       return;
     }
 
     if (connectionsRef.current.some((c) => c.peer === targetId)) {
-      showToast('이미 연결되어 있는 기기입니다.', 3500);
+      showToast('이미 연결되어 있는 기기입니다.', 'warning');
       return;
     }
 
     if (!peerRef.current || peerRef.current.destroyed || peerRef.current.disconnected) {
-      showToast('P2P 서버와 재연결 중입니다. 잠시 후 다시 시도해 주세요.', 3500);
+      showToast('P2P 서버와 재연결 중입니다. 잠시 후 다시 시도해 주세요.', 'warning');
       peerRef.current?.reconnect();
       return;
     }
@@ -548,23 +570,36 @@ export default function App() {
       addLog(`connect() 호출 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!conn) {
-      showToast(`[${targetDisplay}] 연결을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.`, 4000);
+      showToast(`[${targetDisplay}] 연결을 시작하지 못했습니다.`, 'error');
       return;
     }
 
     outgoingConnsRef.current.add(conn);
     pendingConnRef.current = conn;
     setIsConnecting(true);
-    showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 15000);
+    showToast(`[${targetDisplay}] 기기와 연결 중...`, 'loading', 15000);
 
     // 타임아웃 감지 (15초): 응답 없는 연결은 닫아서 뒤늦게 열리지 않도록 함
     const pendingConn = conn;
     connectTimeoutTimer.current = setTimeout(() => {
       if (pendingConnRef.current !== pendingConn) return;
       clearPending();
-      pendingConn.close();
-      addLog(`[${targetDisplay}] 15초 타임아웃 발생.`);
-      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 브라우저 화면이 켜져 있는지 확인해 주세요.`, 5000);
+      addLog(`[${targetDisplay}] 15초 타임아웃 발생. (ICE: ${pendingConn.peerConnection?.iceConnectionState ?? '없음'})`);
+      // 닫기 전에 후보 정보를 남겨 실제 기기 환경의 실패 원인을 파악할 수 있도록 함
+      const pc = pendingConn.peerConnection;
+      const closeConn = () => pendingConn.close();
+      if (pc) {
+        summarizeCandidates(pc)
+          .then((summary) => {
+            addLog(`[${targetDisplay}] 후보 요약 - 내: ${formatCandidateCounts(summary.local)} / 상대: ${formatCandidateCounts(summary.remote)}`);
+            addLog(`[${targetDisplay}] 추정 원인: ${diagnoseFailure(summary)}`);
+          })
+          .catch(() => {})
+          .finally(closeConn);
+      } else {
+        closeConn();
+      }
+      showToast(`[${targetDisplay}] 응답 시간 초과 (상대 화면이 켜져 있는지 확인)`, 'error');
     }, 15000);
 
     setupConnection(conn);
@@ -573,12 +608,15 @@ export default function App() {
   // Peer 인스턴스 초기화 (앱 마운트 시 단 1회 실행)
   useEffect(() => {
     let currentPeer: Peer | null = null;
+    let cancelled = false;
+    let iceConfig: RTCConfiguration = {};
 
     const initPeer = () => {
+      if (cancelled) return;
       const shortId = generateShortCode(6).toLowerCase();
       addLog(`새 로컬 Peer ID 생성 중: ${shortId.toUpperCase()}`);
 
-      const peerOptions: PeerOptions = { config: ICE_CONFIG };
+      const peerOptions: PeerOptions = { config: iceConfig };
       const peer = new Peer(shortId, peerOptions);
       currentPeer = peer;
       peerRef.current = peer;
@@ -626,9 +664,9 @@ export default function App() {
         failedPending?.close();
 
         if (err.type === 'peer-unavailable') {
-          showToast('해당 ID의 기기를 찾을 수 없습니다. (상대방이 새로고침했거나 화면이 꺼져 있을 수 있습니다)', 5000);
+          showToast('해당 ID의 기기를 찾을 수 없습니다.', 'error');
         } else {
-          showToast(`P2P 오류: ${err.message || err.type}`, 4000);
+          showToast(`P2P 오류: ${err.message || err.type}`, 'error');
         }
       });
 
@@ -641,7 +679,18 @@ export default function App() {
       });
     };
 
-    initPeer();
+    // TURN 자격 증명을 먼저 불러온 뒤 Peer 생성 (실패 시 STUN만으로 진행)
+    loadIceConfig().then(({ config, turnSource, turnServerCount }) => {
+      iceConfig = config;
+      if (turnSource === 'fetched' || turnSource === 'static') {
+        addLog(`TURN 릴레이 주소 ${turnServerCount}개 적용 (${turnSource === 'fetched' ? '자격 증명 API' : '고정 설정'})`);
+      } else if (turnSource === 'fetch-failed') {
+        addLog('TURN 자격 증명 불러오기 실패: STUN만으로 연결합니다.');
+      } else {
+        addLog('TURN 미설정: STUN만으로 연결합니다. (LTE/5G 환경에서는 연결이 실패할 수 있음)');
+      }
+      initPeer();
+    });
 
     // 모바일 브라우저 백그라운드 복귀 시 자동 재연결
     const handleVisibilityChange = () => {
@@ -660,6 +709,7 @@ export default function App() {
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      cancelled = true;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
@@ -680,10 +730,13 @@ export default function App() {
     }
   }, [myPeerId]);
 
+  const inviteUrl = myPeerId
+    ? `${window.location.origin}${window.location.pathname}?join=${myPeerId.toUpperCase()}`
+    : '';
+
   // 원클릭 초대 링크 클립보드 복사
   const handleCopyInviteLink = useCallback(async () => {
-    if (!myPeerId) return;
-    const inviteUrl = `${window.location.origin}${window.location.pathname}?join=${myPeerId.toUpperCase()}`;
+    if (!inviteUrl) return;
     try {
       await navigator.clipboard.writeText(inviteUrl);
       setCopiedLink(true);
@@ -691,7 +744,12 @@ export default function App() {
     } catch (err) {
       console.error('Failed to copy invite link:', err);
     }
-  }, [myPeerId]);
+  }, [inviteUrl]);
+
+  const handleShowQr = useCallback(() => setShowQr(true), []);
+  const handleCloseQr = useCallback(() => setShowQr(false), []);
+
+  const onlinePeerIds = useMemo(() => new Set(connections.map((c) => c.peer)), [connections]);
 
   // 폼 제출을 통한 상대방 연결
   const handleConnect = useCallback((e: FormEvent<HTMLFormElement>) => {
@@ -699,7 +757,7 @@ export default function App() {
     const rawInput = peerInputId.trim();
 
     if (!rawInput) {
-      showToast('연결할 상대방의 6자리 ID를 입력해 주세요.', 3000);
+      showToast('연결할 상대방의 6자리 ID를 입력해 주세요.', 'warning');
       return;
     }
 
@@ -720,13 +778,27 @@ export default function App() {
         isConnecting={isConnecting}
         copiedId={copiedId}
         copiedLink={copiedLink}
-        statusMessage={statusMessage}
         showDebug={showDebug}
         onToggleDebug={() => setShowDebug((prev) => !prev)}
         onCopyId={handleCopyId}
         onCopyInviteLink={handleCopyInviteLink}
+        onShowQr={handleShowQr}
         onConnect={handleConnect}
       />
+
+      {/* 상단 플로팅 알림 토스트 */}
+      <Toast toast={toast} />
+
+      {/* QR 코드 초대 모달 */}
+      {showQr && inviteUrl && (
+        <QrInviteModal
+          inviteUrl={inviteUrl}
+          displayId={myPeerId.toUpperCase()}
+          copiedLink={copiedLink}
+          onCopyInviteLink={handleCopyInviteLink}
+          onClose={handleCloseQr}
+        />
+      )}
 
       {/* 디버그 로그 HUD 드롭다운 */}
       {showDebug && (
@@ -755,7 +827,14 @@ export default function App() {
         <SenderPanel text={myText} onChange={handleTextChange} />
 
         {/* 하단 패널: 상대방이 보낸 텍스트 */}
-        <ReceiverPanel text={receivedText} />
+        <ReceiverPanel
+          entries={received}
+          activePeerId={activePeerId}
+          onlinePeerIds={onlinePeerIds}
+          unreadPeerIds={unreadPeerIds}
+          onSelect={handleSelectPeer}
+          onRemove={handleRemovePeerText}
+        />
       </main>
     </div>
   );

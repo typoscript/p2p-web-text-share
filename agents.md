@@ -11,6 +11,7 @@
   - Vite 5
   - Tailwind CSS 3
   - PeerJS 1.5
+  - qrcode 1.5 (QR 초대)
   - Lucide React (아이콘)
 
 ## 2. 핵심 요구사항 및 기능
@@ -38,7 +39,7 @@
    - URL 쿼리 파라미터(`?join=XXXXXX`) 기반 원클릭 초대 링크 복사 및 자동 접속 지원.
 7. **크로스 디바이스(iOS/Mac) P2P 연결 최적화 및 TURN 릴레이 지원**:
    - ID 대소문자 소문자 통일 정규화로 PeerJS 시그널링 불일치 원천 차단.
-   - Google & Cloudflare 다중 STUN 서버 + Open Relay TURN(포트 80/443 TCP/UDP) 풀 구성으로 사파리 시크릿 모드, LTE/5G 대칭형 NAT, 방화벽 환경 홀펀칭 보장.
+   - Google & Cloudflare 다중 STUN 서버 + 환경 변수로 주입하는 TURN 릴레이(선택)로 LTE/5G 대칭형 NAT, 방화벽 환경 대응.
    - iOS Safari 비표준 옵션 충돌 방지 및 모바일 백그라운드 복귀 시 자동 재연결(`visibilitychange`).
    - 실시간 P2P 서버 등록 상태 인디케이터(초록불 `●`) 탑재.
 
@@ -92,6 +93,17 @@
   - 동시 연결로 생긴 중복 연결은 (발신자 ID, connectionId) 기준으로 양측이 동일한 1개만 유지
   - `serialization: 'binary'`로 16KB 초과 텍스트 자동 청크 분할 전송 (긴 텍스트 전송 시 연결 끊김 방지)
   - 진행 중인 발신 연결(`pendingConnRef`)에만 타임아웃/로딩 상태 적용, `peer-unavailable` 시 타이머 해제
+- [x] 수신 텍스트 영역 전체 복사 버튼 추가
+- [x] 프롬프트 11: TURN 릴레이 설정 지원
+  - `src/iceConfig.ts`: 빌드 환경 변수(`VITE_TURN_CREDENTIALS_URL` 또는 `VITE_TURN_URLS`/`USERNAME`/`CREDENTIAL`)로 TURN 주입, 미설정/실패 시 STUN만으로 동작
+  - GitHub Actions 빌드 단계에서 동일 이름의 저장소 Secrets 주입 (`.env.example` 참고)
+  - ICE 연결 후 실제 연결 경로(host/srflx/relay)를 진단 로그에 표시
+- [x] 프롬프트 12: 사용자 편의 기능
+  - QR 코드 초대 모달 (`qrcode` 라이브러리, 초대 링크 `?join=` 인코딩, ESC/배경 클릭 닫기)
+  - 입력/수신 텍스트 저장·복원 (`src/storage.ts`: sessionStorage 탭별 우선 + localStorage 폴백, 300ms 디바운스)
+  - 수신 텍스트 기기별 탭 분리 (`src/components/ReceiverPanel.tsx`: 온라인/오프라인 표시, 새 텍스트 알림 점, 탭별 지우기)
+- [x] ICE 연결 실패 진단 로그: 내 후보 수집 결과(host(mDNS)/srflx/relay), 실패·타임아웃 시 양측 후보 요약 및 추정 원인 표시
+- [x] 상단 플로팅 토스트 알림 (`src/components/Toast.tsx`): 연결/끊김/오류 등을 화면 상단 중앙에 2초간 표시 (success/warning/error/loading 색상 구분, "연결 중..."만 결과가 나올 때까지 유지)
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

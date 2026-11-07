@@ -441,11 +441,26 @@ export default function App() {
       showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 브라우저 화면이 켜져 있는지 확인해 주세요.`, 5000);
     }, 15000);
 
-    // 표준 WebRTC DataConnection 수립 (serialization: 'none'으로 가볍고 빠른 순수 텍스트 전송)
-    const conn = peerRef.current.connect(targetId, {
-      reliable: false,
-      serialization: 'none',
-    });
+    // 표준 WebRTC DataConnection 수립 (serialization: 'raw'로 가볍고 빠른 순수 텍스트 전송)
+    // 주의: PeerJS 1.5의 유효 값은 'raw' | 'json' | 'binary' | 'binary-utf8' 뿐이며, 그 외 값은 connect()에서 예외 발생
+    let conn;
+    try {
+      conn = peerRef.current.connect(targetId, {
+        reliable: true,
+        serialization: 'raw',
+      });
+    } catch (err) {
+      addLog(`connect() 호출 실패: ${err.message || err}`);
+    }
+    if (!conn) {
+      if (connectTimeoutTimer.current) {
+        clearTimeout(connectTimeoutTimer.current);
+        connectTimeoutTimer.current = null;
+      }
+      setIsConnecting(false);
+      showToast(`[${targetDisplay}] 연결을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.`, 4000);
+      return;
+    }
     setupConnection(conn);
   }, [setupConnection, showToast, addLog]);
 

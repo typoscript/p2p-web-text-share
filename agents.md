@@ -63,6 +63,9 @@
 - [x] 프롬프트 5: GitHub Pages CI/CD 자동 배포 환경 구축
   - `vite.config.js`의 `base: '/p2p-web-text-share/'` 설정
   - `.github/workflows/deploy.yml` 작성 (main 브랜치 푸시 시 자동 빌드 및 gh-pages 배포)
+- [x] 프롬프트 6: 상세 기술 명세서(README.md) 작성 완료
+  - 시스템 아키텍처 및 시그널링 흐름 Mermaid 다이어그램 포함
+  - 1:N 메시 브로드캐스팅, 렌더링 최적화, 4중 계층 단절 방어 메커니즘 등 엔지니어링 고려 사항 기술
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

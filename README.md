@@ -122,11 +122,15 @@ p2p-web-text-share/
 │   └── workflows/
 │       └── deploy.yml        # GitHub Actions CI/CD 워크플로우 정의
 ├── src/
-│   ├── App.jsx               # 메인 P2P 로직, 상태 관리, 2분할 UI 컴포넌트
-│   ├── main.jsx              # React DOM 렌더 진입점
+│   ├── App.tsx               # 메인 P2P 로직, 상태 관리, 2분할 UI 컴포넌트
+│   ├── main.tsx              # React DOM 렌더 진입점
+│   ├── vite-env.d.ts         # Vite 클라이언트 타입 선언
 │   └── index.css             # Tailwind 디렉티브 및 100dvh 레이아웃/스크롤바 스타일
 ├── index.html                # 루트 HTML 템플릿
-├── vite.config.js            # Vite 빌드 및 GitHub Pages base 경로('/p2p-web-text-share/') 설정
+├── vite.config.ts            # Vite 빌드 및 GitHub Pages base 경로('/p2p-web-text-share/') 설정
+├── tsconfig.json             # TypeScript 프로젝트 references (app / node)
+├── tsconfig.app.json         # src 대상 strict TS 설정
+├── tsconfig.node.json        # vite.config.ts 대상 TS 설정
 ├── tailwind.config.js        # Tailwind CSS 설정
 ├── postcss.config.js         # PostCSS 플러그인 구성
 ├── package.json              # 의존성 및 스크립트 정의

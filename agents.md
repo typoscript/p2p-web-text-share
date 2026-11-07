@@ -6,6 +6,7 @@
 - **프로젝트명**: p2p-web-text-share
 - **목적**: 별도의 데이터베이스(DB)나 커스텀 백엔드 서버 없이 브라우저 간 WebRTC(PeerJS)를 활용하여 텍스트를 실시간으로 공유하는 P2P 웹 애플리케이션.
 - **주요 기술 스택**:
+  - TypeScript 5 (strict 모드)
   - React 18
   - Vite 5
   - Tailwind CSS 3
@@ -82,6 +83,10 @@
   - ID 대소문자 소문자 통일 정규화로 PeerJS 시그널링 불일치 원천 차단
   - Google & Cloudflare 다중 STUN + Open Relay TURN(TCP 443) 서버 풀 구성으로 사파리 시크릿 모드/LTE NAT 홀펀칭 강화
   - iOS Safari 비표준 옵션 충돌 방지 및 모바일 백그라운드 복귀 시 자동 재연결(`visibilitychange`)
+- [x] 프롬프트 9: TypeScript 전환
+  - `src/*.jsx` → `.tsx`, `vite.config.js` → `.ts` 전환 및 strict 타입 적용
+  - `tsconfig.json`(references) / `tsconfig.app.json` / `tsconfig.node.json` 구성, `npm run build` 시 `tsc -b` 타입 체크 선행
+  - PeerJS `serialization`은 `'raw' | 'json' | 'binary' | 'binary-utf8'`만 유효 (`'none'` 사용 시 `connect()` 예외)
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

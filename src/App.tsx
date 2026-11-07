@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import Peer from 'peerjs';
+import type { DataConnection, PeerOptions } from 'peerjs';
 import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2, Terminal, ChevronDown, ChevronUp } from 'lucide-react';
 
 // 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 // 가장 빠르고 신뢰성 높은 글로벌 STUN 서버 (불안정한 서드파티 TURN 제거하여 타임아웃 지연 원천 차단)
-const ICE_CONFIG = {
+const ICE_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -15,7 +17,7 @@ const ICE_CONFIG = {
   ],
 };
 
-function generateShortCode(length = 6) {
+function generateShortCode(length = 6): string {
   let result = '';
   const bytes = new Uint8Array(length);
   window.crypto.getRandomValues(bytes);
@@ -25,12 +27,29 @@ function generateShortCode(length = 6) {
   return result;
 }
 
-function normalizePeerId(input) {
+function normalizePeerId(input: string): string {
   let clean = input.trim().toLowerCase();
   if (clean.includes('join=')) {
     clean = clean.split('join=')[1].split('&')[0];
   }
   return clean;
+}
+
+interface HeaderProps {
+  myPeerId: string;
+  isPeerReady: boolean;
+  peerInputId: string;
+  setPeerInputId: (value: string) => void;
+  connectedCount: number;
+  isConnecting: boolean;
+  copiedId: boolean;
+  copiedLink: boolean;
+  statusMessage: string;
+  showDebug: boolean;
+  onToggleDebug: () => void;
+  onCopyId: () => void;
+  onCopyInviteLink: () => void;
+  onConnect: (e: FormEvent<HTMLFormElement>) => void;
 }
 
 // 상단 헤더 컴포넌트
@@ -49,7 +68,7 @@ const Header = memo(function Header({
   onCopyId,
   onCopyInviteLink,
   onConnect,
-}) {
+}: HeaderProps) {
   const displayId = myPeerId ? myPeerId.toUpperCase() : '';
 
   return (
@@ -192,7 +211,12 @@ const Header = memo(function Header({
 });
 
 // 상단 패널: 내가 보내는 텍스트 입력창
-const SenderPanel = memo(function SenderPanel({ text, onChange }) {
+interface SenderPanelProps {
+  text: string;
+  onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
+}
+
+const SenderPanel = memo(function SenderPanel({ text, onChange }: SenderPanelProps) {
   return (
     <section className="flex-1 flex flex-col min-h-0 bg-slate-900 border border-slate-800/90 hover:border-slate-700/80 rounded-xl overflow-hidden shadow-lg shadow-black/20 transition-all duration-200">
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/50 border-b border-slate-800/80 transition-colors">
@@ -221,7 +245,7 @@ const SenderPanel = memo(function SenderPanel({ text, onChange }) {
 });
 
 // 하단 패널: 상대방이 보낸 텍스트 수신창
-const ReceiverPanel = memo(function ReceiverPanel({ text }) {
+const ReceiverPanel = memo(function ReceiverPanel({ text }: { text: string }) {
   return (
     <section className="flex-1 flex flex-col min-h-0 bg-slate-900 border border-slate-800/90 hover:border-slate-700/80 rounded-xl overflow-hidden shadow-lg shadow-black/20 transition-all duration-200">
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800/50 border-b border-slate-800/80 transition-colors">
@@ -252,33 +276,33 @@ export default function App() {
   const [myPeerId, setMyPeerId] = useState('');
   const [isPeerReady, setIsPeerReady] = useState(false);
   const [peerInputId, setPeerInputId] = useState('');
-  const [connections, setConnections] = useState([]);
+  const [connections, setConnections] = useState<DataConnection[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [showDebug, setShowDebug] = useState(false);
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState<string[]>([]);
 
   const [myText, setMyText] = useState('');
   const [receivedText, setReceivedText] = useState('');
 
-  const peerRef = useRef(null);
-  const connectionsRef = useRef([]);
+  const peerRef = useRef<Peer | null>(null);
+  const connectionsRef = useRef<DataConnection[]>([]);
   const myTextRef = useRef('');
-  const toastTimerRef = useRef(null);
-  const connectTimeoutTimer = useRef(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoConnectAttempted = useRef(false);
 
   // 실시간 디버그 로그 기록 헬퍼
-  const addLog = useCallback((msg) => {
+  const addLog = useCallback((msg: string) => {
     const time = new Date().toLocaleTimeString();
     console.log(`[P2P LOG ${time}]`, msg);
     setLogs((prev) => [...prev.slice(-30), `[${time}] ${msg}`]);
   }, []);
 
   // 안내 토스트 노출 헬퍼 함수
-  const showToast = useCallback((msg, duration = 3000) => {
+  const showToast = useCallback((msg: string, duration = 3000) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setStatusMessage(msg);
     toastTimerRef.current = setTimeout(() => {
@@ -297,7 +321,7 @@ export default function App() {
   }, [myText]);
 
   // 특정 peer 연결 제거 헬퍼
-  const removeConnection = useCallback((peerId, conn) => {
+  const removeConnection = useCallback((peerId: string, conn: DataConnection) => {
     setConnections((prev) => {
       const next = prev.filter((c) => c !== conn && c.peer !== peerId);
       if (next.length !== prev.length) {
@@ -309,8 +333,8 @@ export default function App() {
   }, [showToast, addLog]);
 
   // 열려 있는 모든 피어에게 브로드캐스트
-  const broadcastText = useCallback((textToSend) => {
-    const deadPeers = [];
+  const broadcastText = useCallback((textToSend: string) => {
+    const deadPeers: string[] = [];
 
     connectionsRef.current.forEach((conn) => {
       if (conn && conn.open) {
@@ -331,14 +355,14 @@ export default function App() {
   }, []);
 
   // 텍스트 입력 변경 핸들러
-  const handleTextChange = useCallback((e) => {
+  const handleTextChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value;
     setMyText(newText);
     broadcastText(newText);
   }, [broadcastText]);
 
   // Connection 이벤트 리스너 등록
-  const setupConnection = useCallback((conn) => {
+  const setupConnection = useCallback((conn: DataConnection) => {
     const targetDisplay = conn.peer.toUpperCase();
     addLog(`상대방(${targetDisplay})과 WebRTC 연결 설정 시작...`);
 
@@ -375,8 +399,11 @@ export default function App() {
     }
 
     // 데이터 수신 이벤트
-    conn.on('data', (data) => {
-      const text = typeof data === 'string' ? data : (data?.text ?? String(data));
+    conn.on('data', (data: unknown) => {
+      const text =
+        typeof data === 'string'
+          ? data
+          : ((data as { text?: string } | null)?.text ?? String(data));
       setReceivedText(text);
     });
 
@@ -387,7 +414,7 @@ export default function App() {
     });
 
     conn.on('error', (err) => {
-      addLog(`[${targetDisplay}] Connection error: ${err.message || err}`);
+      addLog(`[${targetDisplay}] Connection error: ${err.message || String(err)}`);
       setIsConnecting(false);
       removeConnection(conn.peer, conn);
       showToast(`[${targetDisplay}] P2P 오류 (${err.message || '네트워크'})`, 4000);
@@ -408,7 +435,7 @@ export default function App() {
   }, [removeConnection, showToast, addLog]);
 
   // 내부 연결 시도 공통 함수
-  const initiateConnect = useCallback((targetId) => {
+  const initiateConnect = useCallback((targetId: string) => {
     if (!targetId) return;
 
     const myCurrentId = peerRef.current?.id;
@@ -443,14 +470,14 @@ export default function App() {
 
     // 표준 WebRTC DataConnection 수립 (serialization: 'raw'로 가볍고 빠른 순수 텍스트 전송)
     // 주의: PeerJS 1.5의 유효 값은 'raw' | 'json' | 'binary' | 'binary-utf8' 뿐이며, 그 외 값은 connect()에서 예외 발생
-    let conn;
+    let conn: DataConnection | undefined;
     try {
       conn = peerRef.current.connect(targetId, {
         reliable: true,
         serialization: 'raw',
       });
     } catch (err) {
-      addLog(`connect() 호출 실패: ${err.message || err}`);
+      addLog(`connect() 호출 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!conn) {
       if (connectTimeoutTimer.current) {
@@ -466,19 +493,18 @@ export default function App() {
 
   // Peer 인스턴스 초기화 (앱 마운트 시 단 1회 실행)
   useEffect(() => {
-    let currentPeer = null;
+    let currentPeer: Peer | null = null;
 
     const initPeer = () => {
       const shortId = generateShortCode(6).toLowerCase();
       addLog(`새 로컬 Peer ID 생성 중: ${shortId.toUpperCase()}`);
 
-      const peer = new Peer(shortId, {
-        config: ICE_CONFIG,
-      });
+      const peerOptions: PeerOptions = { config: ICE_CONFIG };
+      const peer = new Peer(shortId, peerOptions);
       currentPeer = peer;
       peerRef.current = peer;
 
-      peer.on('open', (id) => {
+      peer.on('open', (id: string) => {
         setMyPeerId(id);
         setIsPeerReady(true);
         addLog(`시그널링 서버 등록 완료! 내 ID: ${id.toUpperCase()}`);
@@ -499,7 +525,7 @@ export default function App() {
       });
 
       // 상대방 연결 요청 수락
-      peer.on('connection', (conn) => {
+      peer.on('connection', (conn: DataConnection) => {
         addLog(`수신 연결 요청 도착: ${conn.peer.toUpperCase()}`);
         setupConnection(conn);
       });
@@ -585,7 +611,7 @@ export default function App() {
   }, [myPeerId]);
 
   // 폼 제출을 통한 상대방 연결
-  const handleConnect = useCallback((e) => {
+  const handleConnect = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const rawInput = peerInputId.trim();
 

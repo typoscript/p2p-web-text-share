@@ -1,38 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import Peer from 'peerjs';
-import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2 } from 'lucide-react';
+import { Copy, Check, Link2, Users, Send, Download, AlertCircle, Sparkles, Share2, Loader2, Terminal, ChevronDown, ChevronUp } from 'lucide-react';
 
 // 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-// 글로벌 STUN + 무료 공용 TURN 릴레이 서버 풀 (사파리 시크릿모드, LTE/5G 대칭형 NAT, 방화벽 돌파)
-const ICE_SERVERS_CONFIG = {
+// 가장 빠르고 신뢰성 높은 글로벌 STUN 서버 (불안정한 서드파티 TURN 제거하여 타임아웃 지연 원천 차단)
+const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // Open Relay Project (TURN 릴레이: P2P 직접 홀펀칭 실패 시 서버 릴레이로 100% 통과)
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelay',
-      credential: 'openrelay',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelay',
-      credential: 'openrelay',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelay',
-      credential: 'openrelay',
-    },
   ],
-  iceCandidatePoolSize: 10,
-  sdpSemantics: 'unified-plan',
 };
 
-// 6자리 고유 랜덤 코드 생성기 (32^6 = 약 10억 7천만 개 조합)
 function generateShortCode(length = 6) {
   let result = '';
   const bytes = new Uint8Array(length);
@@ -43,7 +25,6 @@ function generateShortCode(length = 6) {
   return result;
 }
 
-// 사용자 입력값 정규화 (소문자 변환 및 URL 파라미터 추출)
 function normalizePeerId(input) {
   let clean = input.trim().toLowerCase();
   if (clean.includes('join=')) {
@@ -63,6 +44,8 @@ const Header = memo(function Header({
   copiedId,
   copiedLink,
   statusMessage,
+  showDebug,
+  onToggleDebug,
   onCopyId,
   onCopyInviteLink,
   onConnect,
@@ -149,6 +132,18 @@ const Header = memo(function Header({
             </span>
             <span className="text-slate-400">대</span>
           </div>
+
+          {/* 디버그 로그 토글 버튼 */}
+          <button
+            type="button"
+            onClick={onToggleDebug}
+            title="P2P 상세 연결 로그 확인"
+            className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/40 px-2 py-1 rounded transition-colors"
+          >
+            <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+            <span>로그</span>
+            {showDebug ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
         </div>
 
         {/* 우측: 상대방 ID 입력 및 연결 버튼 */}
@@ -262,6 +257,8 @@ export default function App() {
   const [copiedId, setCopiedId] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [showDebug, setShowDebug] = useState(false);
+  const [logs, setLogs] = useState([]);
 
   const [myText, setMyText] = useState('');
   const [receivedText, setReceivedText] = useState('');
@@ -272,6 +269,13 @@ export default function App() {
   const toastTimerRef = useRef(null);
   const connectTimeoutTimer = useRef(null);
   const autoConnectAttempted = useRef(false);
+
+  // 실시간 디버그 로그 기록 헬퍼
+  const addLog = useCallback((msg) => {
+    const time = new Date().toLocaleTimeString();
+    console.log(`[P2P LOG ${time}]`, msg);
+    setLogs((prev) => [...prev.slice(-30), `[${time}] ${msg}`]);
+  }, []);
 
   // 안내 토스트 노출 헬퍼 함수
   const showToast = useCallback((msg, duration = 3000) => {
@@ -298,10 +302,11 @@ export default function App() {
       const next = prev.filter((c) => c !== conn && c.peer !== peerId);
       if (next.length !== prev.length) {
         showToast(`[${peerId.toUpperCase()}] 기기와의 연결이 종료되었습니다.`, 3000);
+        addLog(`연결 종료됨: ${peerId}`);
       }
       return next;
     });
-  }, [showToast]);
+  }, [showToast, addLog]);
 
   // 열려 있는 모든 피어에게 브로드캐스트
   const broadcastText = useCallback((textToSend) => {
@@ -335,6 +340,7 @@ export default function App() {
   // Connection 이벤트 리스너 등록
   const setupConnection = useCallback((conn) => {
     const targetDisplay = conn.peer.toUpperCase();
+    addLog(`상대방(${targetDisplay})과 WebRTC 연결 설정 시작...`);
 
     const handleOpen = () => {
       if (connectTimeoutTimer.current) {
@@ -349,14 +355,15 @@ export default function App() {
         }
         return [...prev, conn];
       });
+      addLog(`🎉 [${targetDisplay}] 데이터 채널 OPEN 성공!`);
       showToast(`🎉 [${targetDisplay}] 기기와 성공적으로 연결되었습니다!`, 3500);
 
-      // 연결 직후 기존 작성된 텍스트가 있다면 즉시 초기 동기화
+      // 연결 직후 기존 작성된 텍스트 동기화
       if (myTextRef.current && conn.open) {
         try {
           conn.send(myTextRef.current);
         } catch (err) {
-          console.error(`초기 텍스트 동기화 실패 (${conn.peer}):`, err);
+          console.error('초기 텍스트 동기화 실패:', err);
         }
       }
     };
@@ -380,33 +387,25 @@ export default function App() {
     });
 
     conn.on('error', (err) => {
-      console.error(`Connection error with ${conn.peer}:`, err);
+      addLog(`[${targetDisplay}] Connection error: ${err.message || err}`);
       setIsConnecting(false);
       removeConnection(conn.peer, conn);
-      showToast(`[${targetDisplay}] P2P 연결 실패 (${err.message || '네트워크 제한'})`, 4000);
+      showToast(`[${targetDisplay}] P2P 오류 (${err.message || '네트워크'})`, 4000);
     });
 
     // WebRTC PeerConnection ICE 상태 감지
     if (conn.peerConnection) {
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
         const iceState = conn.peerConnection?.iceConnectionState;
+        addLog(`[${targetDisplay}] ICE State: ${iceState}`);
         if (iceState === 'failed') {
-          console.error('ICE Connection failed with', conn.peer);
           setIsConnecting(false);
           removeConnection(conn.peer, conn);
-          showToast(`[${targetDisplay}] NAT/방화벽 통과 실패 (TURN 릴레이 재시도 권장)`, 4000);
-        }
-      });
-
-      conn.peerConnection.addEventListener('connectionstatechange', () => {
-        const state = conn.peerConnection?.connectionState;
-        if (state === 'failed' || state === 'closed') {
-          setIsConnecting(false);
-          removeConnection(conn.peer, conn);
+          showToast(`[${targetDisplay}] 네트워크 방화벽으로 P2P 연결 실패`, 4000);
         }
       });
     }
-  }, [removeConnection, showToast]);
+  }, [removeConnection, showToast, addLog]);
 
   // 내부 연결 시도 공통 함수
   const initiateConnect = useCallback((targetId) => {
@@ -431,19 +430,24 @@ export default function App() {
 
     setIsConnecting(true);
     const targetDisplay = targetId.toUpperCase();
-    showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 12000);
+    addLog(`발신 연결 요청: ${targetDisplay}`);
+    showToast(`[${targetDisplay}] 기기와 P2P 연결 수립 중...`, 15000);
 
-    // 타임아웃 감지 (12초)
+    // 타임아웃 감지 (15초)
     if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
     connectTimeoutTimer.current = setTimeout(() => {
       setIsConnecting(false);
-      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 화면이 켜져 있는지 확인해 주세요.`, 5000);
-    }, 12000);
+      addLog(`[${targetDisplay}] 15초 타임아웃 발생.`);
+      showToast(`[${targetDisplay}] 응답 시간 초과. 상대방 브라우저 화면이 켜져 있는지 확인해 주세요.`, 5000);
+    }, 15000);
 
-    // 표준 WebRTC DataConnection 수립
-    const conn = peerRef.current.connect(targetId);
+    // 표준 WebRTC DataConnection 수립 (serialization: 'none'으로 가볍고 빠른 순수 텍스트 전송)
+    const conn = peerRef.current.connect(targetId, {
+      reliable: false,
+      serialization: 'none',
+    });
     setupConnection(conn);
-  }, [setupConnection, showToast]);
+  }, [setupConnection, showToast, addLog]);
 
   // Peer 인스턴스 초기화 (앱 마운트 시 단 1회 실행)
   useEffect(() => {
@@ -451,9 +455,10 @@ export default function App() {
 
     const initPeer = () => {
       const shortId = generateShortCode(6).toLowerCase();
+      addLog(`새 로컬 Peer ID 생성 중: ${shortId.toUpperCase()}`);
 
       const peer = new Peer(shortId, {
-        config: ICE_SERVERS_CONFIG,
+        config: ICE_CONFIG,
       });
       currentPeer = peer;
       peerRef.current = peer;
@@ -461,6 +466,7 @@ export default function App() {
       peer.on('open', (id) => {
         setMyPeerId(id);
         setIsPeerReady(true);
+        addLog(`시그널링 서버 등록 완료! 내 ID: ${id.toUpperCase()}`);
 
         // URL에 ?join= 파라미터가 있을 시 자동 연결 시도
         if (!autoConnectAttempted.current) {
@@ -479,15 +485,17 @@ export default function App() {
 
       // 상대방 연결 요청 수락
       peer.on('connection', (conn) => {
+        addLog(`수신 연결 요청 도착: ${conn.peer.toUpperCase()}`);
         setupConnection(conn);
       });
 
       peer.on('error', (err) => {
+        addLog(`Peer error: ${err.type} - ${err.message}`);
         console.error('PeerJS error:', err);
         setIsConnecting(false);
 
         if (err.type === 'unavailable-id') {
-          console.warn('ID 충돌 발생, 새 ID로 재초기화합니다.');
+          addLog('ID 충돌 발생, 새 ID로 재생성...');
           peer.destroy();
           initPeer();
           return;
@@ -502,6 +510,7 @@ export default function App() {
 
       peer.on('disconnected', () => {
         setIsPeerReady(false);
+        addLog('시그널링 서버 연결 끊김, 재연결 시도...');
         if (!peer.destroyed) {
           peer.reconnect();
         }
@@ -514,6 +523,7 @@ export default function App() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         if (currentPeer && currentPeer.disconnected && !currentPeer.destroyed) {
+          addLog('화면 복귀 감지: 시그널링 서버 재연결');
           currentPeer.reconnect();
         }
       }
@@ -587,10 +597,33 @@ export default function App() {
         copiedId={copiedId}
         copiedLink={copiedLink}
         statusMessage={statusMessage}
+        showDebug={showDebug}
+        onToggleDebug={() => setShowDebug((prev) => !prev)}
         onCopyId={handleCopyId}
         onCopyInviteLink={handleCopyInviteLink}
         onConnect={handleConnect}
       />
+
+      {/* 디버그 로그 HUD 드롭다운 */}
+      {showDebug && (
+        <div className="flex-none bg-slate-950/95 border-b border-indigo-900/50 p-3 max-h-40 overflow-y-auto font-mono text-xs text-indigo-300 custom-scrollbar select-text">
+          <div className="flex items-center justify-between pb-1 mb-1 border-b border-slate-800 text-slate-400 font-semibold">
+            <span>실시간 P2P 진단 로그</span>
+            <button onClick={() => setLogs([])} className="hover:text-white text-[10px]">
+              로그 비우기
+            </button>
+          </div>
+          {logs.length === 0 ? (
+            <div className="text-slate-600">아직 기록된 로그가 없습니다.</div>
+          ) : (
+            logs.map((log, idx) => (
+              <div key={idx} className="leading-tight py-0.5">
+                {log}
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* 메인 컨텐츠: 상하 2분할 패널 */}
       <main className="flex-1 flex flex-col min-h-0 p-3 sm:p-4 gap-3 sm:gap-4 max-w-7xl w-full mx-auto select-text">

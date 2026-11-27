@@ -262,8 +262,9 @@ export default function App() {
   const connectTimeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 현재 진행 중인 발신 연결 (타임아웃/로딩 상태는 이 연결에만 적용)
   const pendingConnRef = useRef<DataConnection | null>(null);
-  // 내가 발신한 연결 목록 (중복 연결 시 양측이 동일한 연결을 남기기 위한 판정용)
-  const outgoingConnsRef = useRef(new WeakSet<DataConnection>());
+  // 내가 발신한 연결 -> 발신 당시 내 Peer ID (중복 연결 시 양측이 동일한 연결을 남기기 위한 판정용)
+  // 시그널링 서버와 끊긴 동안 peer.id는 null이 되므로, 판정 시점이 아닌 발신 시점의 ID를 보관
+  const outgoingConnsRef = useRef(new WeakMap<DataConnection, string>());
   const autoConnectAttempted = useRef(false);
   // 시그널링 서버 즉시 재연결 요청 (Peer 초기화 effect에서 실제 구현을 채움)
   const reconnectNowRef = useRef<() => void>(() => {});
@@ -380,7 +381,7 @@ export default function App() {
   // 같은 피어와 연결이 2개 생겼을 때 양측이 동일하게 남길 연결 판정 키
   // (발신자 ID가 작은 쪽 → connectionId가 작은 쪽 우선, connectionId는 양측이 공유)
   const connectionRank = useCallback((conn: DataConnection) => {
-    const initiatorId = outgoingConnsRef.current.has(conn) ? peerRef.current?.id ?? '' : conn.peer;
+    const initiatorId = outgoingConnsRef.current.get(conn) ?? conn.peer;
     return `${initiatorId}|${conn.connectionId}`;
   }, []);
 
@@ -570,7 +571,7 @@ export default function App() {
       return;
     }
 
-    outgoingConnsRef.current.add(conn);
+    outgoingConnsRef.current.set(conn, peerRef.current.id);
     pendingConnRef.current = conn;
     setIsConnecting(true);
     showToast(`[${targetDisplay}] 기기와 연결 중...`, 'loading', 15000);
@@ -703,13 +704,15 @@ export default function App() {
           return;
         }
 
-        // 진행 중인 발신 연결은 실패 처리 (타임아웃 메시지가 뒤늦게 중복 노출되지 않도록 타이머도 해제)
-        const failedPending = pendingConnRef.current;
-        clearPending();
-        failedPending?.close();
-
         if (err.type === 'peer-unavailable') {
-          showToast('해당 ID의 기기를 찾을 수 없습니다.', 'error');
+          // 진행 중인 발신 연결의 대상일 때만 실패 처리 (타임아웃 메시지가 뒤늦게 중복 노출되지 않도록 타이머도 해제)
+          // 서버 연결 오류 등 다른 오류는 이미 진행 중인 WebRTC 협상과 무관하므로 연결을 건드리지 않음
+          const failedPending = pendingConnRef.current;
+          if (failedPending && err.message.includes(failedPending.peer)) {
+            clearPending();
+            failedPending.close();
+            showToast(`[${toDisplayCode(failedPending.peer)}] 기기를 찾을 수 없습니다.`, 'error');
+          }
         } else if (SERVER_CONNECTION_ERRORS.has(err.type) && (reconnectAttempts > 0 || peer.disconnected)) {
           // 재연결 실패가 반복되는 동안에는 로그만 남김 (토스트는 처음 끊겼을 때 1회)
         } else {

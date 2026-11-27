@@ -109,6 +109,8 @@
   - 시그널링 서버 재연결 지수 백오프(1초→최대 30초), `online`/화면 복귀 시 즉시 재연결, 반복 실패 시 오류 토스트는 1회만 표시
   - `peer.destroy()` 중 발생하는 `disconnected`에서 재연결하지 않도록 하여 버려진 Peer의 WebSocket이 남는 문제 수정
   - 열리기 전에 닫힌 발신 연결의 "연결 중..." 토스트를 종료 알림으로 교체
+  - 중복 연결 판정에 발신 시점의 내 ID를 보관하여 사용 (시그널링 끊김 중 `peer.id`가 null이 되어 양측 판정이 엇갈리던 문제 수정)
+  - Peer 오류 시 진행 중인 발신 연결은 `peer-unavailable`(해당 대상)일 때만 닫음 (서버 연결 오류로 진행 중인 협상이 끊기지 않도록)
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

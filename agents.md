@@ -104,6 +104,11 @@
   - 수신 텍스트 기기별 탭 분리 (`src/components/ReceiverPanel.tsx`: 온라인/오프라인 표시, 새 텍스트 알림 점, 탭별 지우기)
 - [x] ICE 연결 실패 진단 로그: 내 후보 수집 결과(host(mDNS)/srflx/relay), 실패·타임아웃 시 양측 후보 요약 및 추정 원인 표시
 - [x] 상단 플로팅 토스트 알림 (`src/components/Toast.tsx`): 연결/끊김/오류 등을 화면 상단 중앙에 2초간 표시 (success/warning/error/loading 색상 구분, "연결 중..."만 결과가 나올 때까지 유지)
+- [x] 연결 안정성 버그 수정 2
+  - `src/peerId.ts`: 실제 PeerJS ID에 `p2ptxt-` 네임스페이스 적용 (화면·초대 링크에는 6자리 코드만 표시, 입력값은 코드/링크/전체 ID 모두 허용)
+  - 시그널링 서버 재연결 지수 백오프(1초→최대 30초), `online`/화면 복귀 시 즉시 재연결, 반복 실패 시 오류 토스트는 1회만 표시
+  - `peer.destroy()` 중 발생하는 `disconnected`에서 재연결하지 않도록 하여 버려진 Peer의 WebSocket이 남는 문제 수정
+  - 열리기 전에 닫힌 발신 연결의 "연결 중..." 토스트를 종료 알림으로 교체
 
 ## 5. 배포 및 CI/CD
 - 이 프로젝트는 CI/CD 구축되어 있어, main 브랜치에 코드가 푸시되면 GitHub Actions를 통해 GitHub Pages로 자동 빌드 및 배포됩니다. 배포 관련 설정은 .github/workflows/deploy.yml과 vite.config.js의 base 속성에 정의되어 있습니다.

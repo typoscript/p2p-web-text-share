@@ -10,30 +10,17 @@ import type { ToastState, ToastVariant } from './components/Toast';
 import { ReceiverPanel } from './components/ReceiverPanel';
 import { loadMyText, saveMyText, loadReceived, saveReceived } from './storage';
 import type { ReceivedEntry } from './storage';
+import { generatePeerId, normalizePeerId, toDisplayCode } from './peerId';
 
 // 알림 토스트 기본 표시 시간
 const TOAST_DURATION_MS = 2000;
 
-// 가독성 높은 Base32 문자셋 (0/O, 1/I/L 혼동 문자 제외)
-const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+// 시그널링 서버 재연결 백오프 (1초부터 2배씩, 최대 30초)
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
 
-function generateShortCode(length = 6): string {
-  let result = '';
-  const bytes = new Uint8Array(length);
-  window.crypto.getRandomValues(bytes);
-  for (let i = 0; i < length; i++) {
-    result += CODE_CHARS[bytes[i] % CODE_CHARS.length];
-  }
-  return result;
-}
-
-function normalizePeerId(input: string): string {
-  let clean = input.trim().toLowerCase();
-  if (clean.includes('join=')) {
-    clean = clean.split('join=')[1].split('&')[0];
-  }
-  return clean;
-}
+// 서버 연결이 끊긴 동안 재연결 시도마다 반복되는 오류 (토스트는 끊긴 직후 1회만 표시)
+const SERVER_CONNECTION_ERRORS = new Set(['network', 'socket-error', 'socket-closed', 'server-error']);
 
 interface HeaderProps {
   myPeerId: string;
@@ -69,7 +56,7 @@ const Header = memo(function Header({
   onShowQr,
   onConnect,
 }: HeaderProps) {
-  const displayId = myPeerId ? myPeerId.toUpperCase() : '';
+  const displayId = myPeerId ? toDisplayCode(myPeerId) : '';
 
   return (
     <header className="flex-none bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6 transition-colors duration-200">
@@ -278,6 +265,8 @@ export default function App() {
   // 내가 발신한 연결 목록 (중복 연결 시 양측이 동일한 연결을 남기기 위한 판정용)
   const outgoingConnsRef = useRef(new WeakSet<DataConnection>());
   const autoConnectAttempted = useRef(false);
+  // 시그널링 서버 즉시 재연결 요청 (Peer 초기화 effect에서 실제 구현을 채움)
+  const reconnectNowRef = useRef<() => void>(() => {});
 
   // 실시간 디버그 로그 기록 헬퍼
   const addLog = useCallback((msg: string) => {
@@ -384,8 +373,8 @@ export default function App() {
   const removeConnection = useCallback((conn: DataConnection) => {
     if (!connectionsRef.current.includes(conn)) return;
     commitConnections(connectionsRef.current.filter((c) => c !== conn));
-    showToast(`[${conn.peer.toUpperCase()}] 기기와의 연결이 끊어졌습니다.`, 'warning');
-    addLog(`연결 종료됨: ${conn.peer}`);
+    showToast(`[${toDisplayCode(conn.peer)}] 기기와의 연결이 끊어졌습니다.`, 'warning');
+    addLog(`연결 종료됨: ${toDisplayCode(conn.peer)}`);
   }, [commitConnections, showToast, addLog]);
 
   // 같은 피어와 연결이 2개 생겼을 때 양측이 동일하게 남길 연결 판정 키
@@ -424,7 +413,7 @@ export default function App() {
 
   // Connection 이벤트 리스너 등록
   const setupConnection = useCallback((conn: DataConnection) => {
-    const targetDisplay = conn.peer.toUpperCase();
+    const targetDisplay = toDisplayCode(conn.peer);
     addLog(`상대방(${targetDisplay})과 WebRTC 연결 설정 시작...`);
 
     const handleOpen = () => {
@@ -475,7 +464,13 @@ export default function App() {
 
     // 연결 종료 및 에러 처리
     conn.on('close', () => {
-      clearPending(conn);
+      // 열리기 전에 닫힌 발신 연결: removeConnection은 목록에 없어 알림을 띄우지 않으므로 직접 결과 표시
+      if (pendingConnRef.current === conn) {
+        clearPending(conn);
+        addLog(`[${targetDisplay}] 연결이 열리기 전에 종료됨`);
+        showToast(`[${targetDisplay}] 연결이 종료되었습니다. 다시 시도해 주세요.`, 'error');
+        return;
+      }
       removeConnection(conn);
     });
 
@@ -545,11 +540,12 @@ export default function App() {
 
     if (!peerRef.current || peerRef.current.destroyed || peerRef.current.disconnected) {
       showToast('P2P 서버와 재연결 중입니다. 잠시 후 다시 시도해 주세요.', 'warning');
-      peerRef.current?.reconnect();
+      // 백오프 대기 중이면 기다리지 않고 바로 재연결 시도
+      reconnectNowRef.current();
       return;
     }
 
-    const targetDisplay = targetId.toUpperCase();
+    const targetDisplay = toDisplayCode(targetId);
     addLog(`발신 연결 요청: ${targetDisplay}`);
 
     // 이전 발신 시도가 남아 있으면 정리 (늦게 열려 중복 연결이 되는 것 방지)
@@ -610,21 +606,70 @@ export default function App() {
     let currentPeer: Peer | null = null;
     let cancelled = false;
     let iceConfig: RTCConfiguration = {};
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    // 실제 재연결 시도: 타이머가 도는 사이 상태가 바뀌었을 수 있으므로 매번 다시 확인
+    // (peer.destroy()는 destroyed 플래그를 세우기 전에 'disconnected'를 먼저 발생시키므로,
+    //  핸들러에서 동기로 reconnect()를 호출하면 버려진 Peer의 WebSocket이 다시 열림)
+    const tryReconnect = (peer: Peer) => {
+      clearReconnectTimer();
+      if (cancelled || peer !== currentPeer || peer.destroyed || !peer.disconnected) return;
+      reconnectAttempts += 1;
+      addLog(`시그널링 서버 재연결 시도 (${reconnectAttempts}회차)`);
+      try {
+        peer.reconnect();
+      } catch (err) {
+        addLog(`재연결 호출 실패: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+
+    // 지수 백오프로 재연결 예약 (오프라인에서 즉시 재시도가 무한 반복되는 것 방지)
+    const scheduleReconnect = (peer: Peer) => {
+      if (reconnectTimer || cancelled || peer !== currentPeer) return;
+      const delay = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts, RECONNECT_MAX_DELAY_MS);
+      addLog(`시그널링 서버 연결 끊김, ${Math.round(delay / 1000)}초 후 재연결...`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        tryReconnect(peer);
+      }, delay);
+    };
+
+    // 화면 복귀/네트워크 복구/연결 시도 시 백오프를 기다리지 않고 바로 재연결
+    const reconnectNow = () => {
+      if (currentPeer && currentPeer.disconnected && !currentPeer.destroyed) {
+        tryReconnect(currentPeer);
+      }
+    };
+    reconnectNowRef.current = reconnectNow;
 
     const initPeer = () => {
       if (cancelled) return;
-      const shortId = generateShortCode(6).toLowerCase();
-      addLog(`새 로컬 Peer ID 생성 중: ${shortId.toUpperCase()}`);
+      // 이전 Peer에 예약된 재연결은 무효화
+      clearReconnectTimer();
+      reconnectAttempts = 0;
+
+      const newId = generatePeerId();
+      addLog(`새 로컬 Peer ID 생성 중: ${toDisplayCode(newId)}`);
 
       const peerOptions: PeerOptions = { config: iceConfig };
-      const peer = new Peer(shortId, peerOptions);
+      const peer = new Peer(newId, peerOptions);
       currentPeer = peer;
       peerRef.current = peer;
 
       peer.on('open', (id: string) => {
+        clearReconnectTimer();
+        reconnectAttempts = 0;
         setMyPeerId(id);
         setIsPeerReady(true);
-        addLog(`시그널링 서버 등록 완료! 내 ID: ${id.toUpperCase()}`);
+        addLog(`시그널링 서버 등록 완료! 내 ID: ${toDisplayCode(id)}`);
 
         // URL에 ?join= 파라미터가 있을 시 자동 연결 시도
         if (!autoConnectAttempted.current) {
@@ -643,7 +688,7 @@ export default function App() {
 
       // 상대방 연결 요청 수락
       peer.on('connection', (conn: DataConnection) => {
-        addLog(`수신 연결 요청 도착: ${conn.peer.toUpperCase()}`);
+        addLog(`수신 연결 요청 도착: ${toDisplayCode(conn.peer)}`);
         setupConnection(conn);
       });
 
@@ -665,6 +710,8 @@ export default function App() {
 
         if (err.type === 'peer-unavailable') {
           showToast('해당 ID의 기기를 찾을 수 없습니다.', 'error');
+        } else if (SERVER_CONNECTION_ERRORS.has(err.type) && (reconnectAttempts > 0 || peer.disconnected)) {
+          // 재연결 실패가 반복되는 동안에는 로그만 남김 (토스트는 처음 끊겼을 때 1회)
         } else {
           showToast(`P2P 오류: ${err.message || err.type}`, 'error');
         }
@@ -672,10 +719,7 @@ export default function App() {
 
       peer.on('disconnected', () => {
         setIsPeerReady(false);
-        addLog('시그널링 서버 연결 끊김, 재연결 시도...');
-        if (!peer.destroyed) {
-          peer.reconnect();
-        }
+        scheduleReconnect(peer);
       });
     };
 
@@ -694,14 +738,21 @@ export default function App() {
 
     // 모바일 브라우저 백그라운드 복귀 시 자동 재연결
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        if (currentPeer && currentPeer.disconnected && !currentPeer.destroyed) {
-          addLog('화면 복귀 감지: 시그널링 서버 재연결');
-          currentPeer.reconnect();
-        }
+      if (document.visibilityState === 'visible' && currentPeer?.disconnected) {
+        addLog('화면 복귀 감지: 시그널링 서버 재연결');
+        reconnectNow();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // 네트워크 복구 시 백오프 대기 없이 재연결
+    const handleOnline = () => {
+      if (currentPeer?.disconnected) {
+        addLog('네트워크 복구 감지: 시그널링 서버 재연결');
+        reconnectNow();
+      }
+    };
+    window.addEventListener('online', handleOnline);
 
     const handleBeforeUnload = () => {
       currentPeer?.destroy();
@@ -710,7 +761,10 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      clearReconnectTimer();
+      reconnectNowRef.current = () => {};
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       if (connectTimeoutTimer.current) clearTimeout(connectTimeoutTimer.current);
       currentPeer?.destroy();
@@ -722,7 +776,7 @@ export default function App() {
   const handleCopyId = useCallback(async () => {
     if (!myPeerId) return;
     try {
-      await navigator.clipboard.writeText(myPeerId.toUpperCase());
+      await navigator.clipboard.writeText(toDisplayCode(myPeerId));
       setCopiedId(true);
       setTimeout(() => setCopiedId(false), 2000);
     } catch (err) {
@@ -731,7 +785,7 @@ export default function App() {
   }, [myPeerId]);
 
   const inviteUrl = myPeerId
-    ? `${window.location.origin}${window.location.pathname}?join=${myPeerId.toUpperCase()}`
+    ? `${window.location.origin}${window.location.pathname}?join=${toDisplayCode(myPeerId)}`
     : '';
 
   // 원클릭 초대 링크 클립보드 복사
@@ -793,7 +847,7 @@ export default function App() {
       {showQr && inviteUrl && (
         <QrInviteModal
           inviteUrl={inviteUrl}
-          displayId={myPeerId.toUpperCase()}
+          displayId={toDisplayCode(myPeerId)}
           copiedLink={copiedLink}
           onCopyInviteLink={handleCopyInviteLink}
           onClose={handleCloseQr}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Copy, Check, Download, X } from 'lucide-react';
 import type { ReceivedEntry } from '../storage';
+import { toDisplayCode } from '../peerId';
 
 interface ReceiverPanelProps {
   entries: ReceivedEntry[];
@@ -116,7 +117,7 @@ export const ReceiverPanel = memo(function ReceiverPanel({
                   className="flex items-center gap-1.5 pl-2.5 pr-1 py-1 tracking-wider active:scale-95 transition-transform"
                 >
                   <span className={`inline-flex h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-slate-600'}`} />
-                  <span>{entry.peerId.toUpperCase()}</span>
+                  <span>{toDisplayCode(entry.peerId)}</span>
                   {isUnread && <span className="inline-flex h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" title="새 텍스트" />}
                 </button>
                 <button

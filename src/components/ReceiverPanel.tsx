@@ -114,20 +114,24 @@ export const ReceiverPanel = memo(function ReceiverPanel({
                   aria-selected={isActive}
                   onClick={() => onSelect(entry.peerId)}
                   title={isOnline ? '연결됨' : '연결 끊김 (마지막으로 받은 텍스트)'}
-                  className="flex items-center gap-1.5 pl-2.5 pr-1 py-1 tracking-wider active:scale-95 transition-transform"
+                  className={`flex items-center gap-1.5 pl-2.5 ${isActive ? 'pr-1' : 'pr-2.5'} py-1.5 tracking-wider active:scale-95 transition-transform`}
                 >
                   <span className={`inline-flex h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                   <span>{toDisplayCode(entry.peerId)}</span>
                   {isUnread && <span className="inline-flex h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" title="새 텍스트" />}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onRemove(entry.peerId)}
-                  title="이 기기의 수신 텍스트 지우기"
-                  className="p-1 mr-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-700/70 transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+                {/* 지우기 버튼은 선택된 탭에만 표시 (모바일에서 탭 선택 중 실수로 지우는 것 방지) */}
+                {isActive && (
+                  <button
+                    type="button"
+                    onClick={() => onRemove(entry.peerId)}
+                    title="이 기기의 수신 텍스트 지우기"
+                    aria-label={`${toDisplayCode(entry.peerId)} 수신 텍스트 지우기`}
+                    className="p-1.5 mr-0.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-700/70 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             );
           })}
@@ -139,7 +143,7 @@ export const ReceiverPanel = memo(function ReceiverPanel({
           readOnly
           value={text}
           placeholder="연결된 상대방이 입력한 텍스트가 실시간으로 여기에 표시됩니다. (여러 기기 연결 시 기기별 탭으로 구분)"
-          className="w-full h-full resize-none bg-transparent text-slate-300 text-sm font-mono p-2 focus:outline-none placeholder-slate-600 leading-relaxed cursor-default custom-scrollbar transition-opacity duration-150"
+          className="w-full h-full resize-none bg-transparent text-slate-300 text-base sm:text-sm font-mono p-2 focus:outline-none placeholder-slate-600 leading-relaxed cursor-default custom-scrollbar transition-opacity duration-150"
           spellCheck={false}
         />
       </div>

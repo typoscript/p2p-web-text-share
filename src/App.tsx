@@ -87,7 +87,7 @@ const Header = memo(function Header({
               onClick={onCopyId}
               disabled={!displayId}
               title="6자리 ID 복사"
-              className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
             >
               {copiedId ? (
                 <Check className="w-4 h-4 text-emerald-400 transition-transform scale-110" />
@@ -102,7 +102,7 @@ const Header = memo(function Header({
               onClick={onCopyInviteLink}
               disabled={!displayId}
               title="원클릭 초대 링크 복사"
-              className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
+              className="p-1.5 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
             >
               {copiedLink ? (
                 <Check className="w-4 h-4 text-emerald-400 transition-transform scale-110" />
@@ -117,7 +117,7 @@ const Header = memo(function Header({
               onClick={onShowQr}
               disabled={!displayId}
               title="QR 코드로 초대"
-              className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
+              className="p-1.5 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/70 disabled:opacity-30 rounded transition-all duration-150 active:scale-90"
             >
               <QrCode className="w-4 h-4" />
             </button>
@@ -169,9 +169,9 @@ const Header = memo(function Header({
             type="text"
             value={peerInputId}
             onChange={(e) => setPeerInputId(e.target.value.toUpperCase())}
-            placeholder="상대방 6자리 ID (예: 7K9P2X)"
+            placeholder="상대방 6자리 ID"
             disabled={isConnecting}
-            className="flex-1 sm:w-64 bg-slate-800/70 hover:bg-slate-800 focus:bg-slate-800/90 border border-slate-700/80 text-slate-100 text-xs sm:text-sm rounded-lg px-3 py-1.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder-slate-500 font-mono tracking-wider shadow-inner disabled:opacity-50"
+            className="flex-1 min-w-0 sm:w-64 bg-slate-800/70 hover:bg-slate-800 focus:bg-slate-800/90 border border-slate-700/80 text-slate-100 text-base sm:text-sm rounded-lg px-3 py-1.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder-slate-500 font-mono tracking-wider shadow-inner disabled:opacity-50"
           />
           <button
             type="submit"
@@ -222,7 +222,7 @@ const SenderPanel = memo(function SenderPanel({ text, onChange }: SenderPanelPro
           value={text}
           onChange={onChange}
           placeholder="여기에 전송할 텍스트를 자유롭게 입력하세요... (입력 즉시 연결된 모든 기기로 전송됩니다)"
-          className="w-full h-full resize-none bg-transparent text-slate-100 text-sm font-mono p-2 focus:outline-none placeholder-slate-600 leading-relaxed custom-scrollbar transition-opacity duration-150"
+          className="w-full h-full resize-none bg-transparent text-slate-100 text-base sm:text-sm font-mono p-2 focus:outline-none placeholder-slate-600 leading-relaxed custom-scrollbar transition-opacity duration-150"
           spellCheck={false}
         />
       </div>

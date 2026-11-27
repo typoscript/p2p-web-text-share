@@ -58,12 +58,23 @@ export function saveMyText(text: string): void {
   writeItem(MY_TEXT_KEY, text || null);
 }
 
+// 복원 시 정리 기준: 상대 기기 ID는 접속할 때마다 바뀌므로 오래된 탭은 다시 연결될 일이 없음
+const RECEIVED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const RECEIVED_MAX_ENTRIES = 10;
+
 export function loadReceived(): ReceivedEntry[] {
   try {
     const raw = readItem(RECEIVED_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isReceivedEntry) : [];
+    if (!Array.isArray(parsed)) return [];
+    // 24시간 지난 탭은 버리고, 최근 받은 순으로 최대 10개만 유지 (표시 순서는 기존 순서 그대로)
+    const cutoff = Date.now() - RECEIVED_MAX_AGE_MS;
+    const fresh = parsed.filter(isReceivedEntry).filter((e) => e.updatedAt >= cutoff);
+    const keep = new Set(
+      [...fresh].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, RECEIVED_MAX_ENTRIES),
+    );
+    return fresh.filter((e) => keep.has(e));
   } catch {
     return [];
   }

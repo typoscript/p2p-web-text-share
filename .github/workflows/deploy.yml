@@ -26,7 +26,12 @@ jobs:
           run: npm ci                                                                                
                                                                                                      
         - name: Build                                                                                
-          run: npm run build                                                                         
+          run: npm run build      
+          env:
+            VITE_TURN_CREDENTIALS_URL: ${{ secrets.VITE_TURN_CREDENTIALS_URL }}
+            VITE_TURN_URLS: ${{ secrets.VITE_TURN_URLS }}
+            VITE_TURN_USERNAME: ${{ secrets.VITE_TURN_USERNAME }}
+            VITE_TURN_CREDENTIAL: ${{ secrets.VITE_TURN_CREDENTIAL }}
                                                                                                      
         - name: Deploy to GitHub Pages                                                               
           uses: peaceiris/actions-gh-pages@v4                                                        
